@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "FarmEasy",
+    "slug": "farmeasy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#1B4332"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.farmeasy.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "FarmEasy needs camera access to analyze your crops.",
+        "NSPhotoLibraryUsageDescription": "FarmEasy needs photo library access to upload crop images.",
+        "NSLocationWhenInUseUsageDescription": "FarmEasy needs your location for weather updates and local services."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1B4332"
+      },
+      "package": "com.farmeasy.app",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "FarmEasy needs camera to analyze crops."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "FarmEasy needs location for weather and local services."
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
