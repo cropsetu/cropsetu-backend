@@ -31,7 +31,6 @@ export const API_BASE_URL = __DEV__
     : `http://${DEV_LAN_IP}:3001/api/v1`
   : 'https://resilient-vision-production-917c.up.railway.app/api/v1';
 
-// Socket.IO is served by the same Express process as the HTTP API (port 3001).
 export const SOCKET_URL = __DEV__
   ? Platform.OS === 'web'
     ? 'http://localhost:3001'
