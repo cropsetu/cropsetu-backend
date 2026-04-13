@@ -96,14 +96,14 @@ export async function scanCropImage(imageUri, farmContext = {}, pickerMimeType =
 
   const formData = new FormData();
 
-  if (isWeb) {
-    // Web: imageUri is a blob/data URL — fetch → Blob then append.
-    const resp = await fetch(uploadUri);
-    const blob = await resp.blob();
-    formData.append('image', blob, safeName);
-  } else {
-    formData.append('image', { uri: uploadUri, name: safeName, type });
-  }
+  // On React Native New Architecture (RN 0.76+, newArchEnabled=true), the
+  // { uri, name, type } FormData pattern silently fails on Android — the
+  // networking module drops the file before sending and nothing reaches the
+  // backend.  Using fetch(uri) → Blob works on all platforms (iOS, Android,
+  // web) and is the safe unified approach.
+  const resp = await fetch(uploadUri);
+  const blob = await resp.blob();
+  formData.append('image', blob, safeName);
 
   formData.append('farmContext', JSON.stringify(farmContext));
 
