@@ -1,0 +1,68 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:   # allow manual trigger from GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Force production API URL even in debug builds
+      - name: Patch API URL for debug build
+        run: |
+          sed -i "s|__DEV__.*?.*'https://|'https://|g" src/constants/config.js || true
+          node -e "
+            const fs = require('fs');
+            let c = fs.readFileSync('src/constants/config.js', 'utf8');
+            c = c.replace(
+              /export const API_BASE_URL = __DEV__[\s\S]*?;/,
+              \"export const API_BASE_URL = 'https://resilient-vision-production-e784.up.railway.app/api/v1';\"
+            );
+            c = c.replace(
+              /export const SOCKET_URL = __DEV__[\s\S]*?;/,
+              \"export const SOCKET_URL = 'wss://resilient-vision-production-e784.up.railway.app';\"
+            );
+            fs.writeFileSync('src/constants/config.js', c);
+            console.log('Patched API_BASE_URL to production');
+          "
+
+      - name: Make Gradlew executable
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: farmeasy-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
