@@ -21,7 +21,7 @@
 // ── Backend address ────────────────────────────────────────────────────────
 import { Platform } from 'react-native';
 
-const DEV_LAN_IP = '192.168.1.10'; // change to your dev machine's LAN IP
+const DEV_LAN_IP = '10.0.2.2'; // Android emulator alias for Mac localhost
 
 // Web builds run in the browser on the same machine as the dev server,
 // so localhost is always reachable.  Mobile devices need the LAN IP.

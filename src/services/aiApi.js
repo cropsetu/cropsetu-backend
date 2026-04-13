@@ -5,7 +5,7 @@
  */
 import api, { getAccessToken } from './api';
 import { compressImage } from '../utils/mediaCompressor';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { API_BASE_URL } from '../constants/config';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,6 +315,87 @@ export async function getMandiTrend(commodity, market, days = 7) {
 
 export async function getNearbyMandis(district) {
   const { data } = await api.get('/mandi/nearby', { params: { district } });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AGRIPREDICT — Real data.gov.in prices + Claude-powered predictions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get list of states that have data in the DB.
+ */
+export async function getAgriPredictStates() {
+  const { data } = await api.get('/agripredict/filters/states');
+  return data.data?.states || [];
+}
+
+/**
+ * Get districts for a state (from DB).
+ */
+export async function getAgriPredictDistricts(state) {
+  const { data } = await api.get('/agripredict/filters/districts', { params: { state } });
+  return data.data?.districts || [];
+}
+
+/**
+ * Get commodities available for a state+district in DB.
+ */
+export async function getAgriPredictCommodities(state, district = null) {
+  const params = { state };
+  if (district) params.district = district;
+  const { data } = await api.get('/agripredict/filters/commodities', { params });
+  return data.data?.commodities || [];
+}
+
+/**
+ * Get 5-year monthly historical price data for a commodity+state+district.
+ * Returns { monthlySummary, stats, summary }
+ */
+export async function getAgriHistoricalPrices(commodity, state, district = null) {
+  const params = { commodity, state };
+  if (district) params.district = district;
+  const { data } = await api.get('/agripredict/prices/history', { params, timeout: 15000 });
+  return data.data;
+}
+
+/**
+ * Get Claude-powered price prediction (cache-first, returns in <1s if cached).
+ * Returns { cached, prediction, nearbyMarkets, dataUsed, ... }
+ */
+export async function getAgriPrediction(commodity, state, district = '') {
+  const { data } = await api.post(
+    '/agripredict/predict',
+    { commodity, state, district },
+    { timeout: 30000 }
+  );
+  return data.data;
+}
+
+/**
+ * Compare current prices across nearby districts for same commodity.
+ */
+export async function getAgriNearbyComparison(commodity, state, district = '') {
+  const { data } = await api.get('/agripredict/compare', {
+    params: { commodity, state, district },
+  });
+  return data.data;
+}
+
+/**
+ * Trigger a background data sync from data.gov.in for a commodity+state.
+ * Non-blocking — returns 202 immediately.
+ */
+export async function triggerAgriSync(commodity, state, district = null) {
+  const { data } = await api.post('/agripredict/sync/trigger', { commodity, state, district });
+  return data.data;
+}
+
+/**
+ * Get the status of the last data sync for a commodity+state.
+ */
+export async function getAgriSyncStatus(commodity, state) {
+  const { data } = await api.get('/agripredict/sync/status', { params: { commodity, state } });
   return data.data;
 }
 
