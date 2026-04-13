@@ -3,12 +3,12 @@ name: Build Android APK
 on:
   push:
     branches: [main]
-  workflow_dispatch:   # allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -26,41 +26,41 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install dependencies
         run: npm ci
 
-      # Force production API URL even in debug builds
-      - name: Patch API URL for debug build
+      # Patch config.js so the debug APK hits Railway, not LAN IP
+      - name: Patch API URL to production
         run: |
-          sed -i "s|__DEV__.*?.*'https://|'https://|g" src/constants/config.js || true
           node -e "
             const fs = require('fs');
             let c = fs.readFileSync('src/constants/config.js', 'utf8');
             c = c.replace(
-              /export const API_BASE_URL = __DEV__[\s\S]*?;/,
-              \"export const API_BASE_URL = 'https://resilient-vision-production-e784.up.railway.app/api/v1';\"
+              /export const API_BASE_URL[\s\S]*?(?=\nexport|\n\/\/|$)/,
+              \"export const API_BASE_URL = 'https://resilient-vision-production-e784.up.railway.app/api/v1';\n\"
             );
             c = c.replace(
-              /export const SOCKET_URL = __DEV__[\s\S]*?;/,
-              \"export const SOCKET_URL = 'wss://resilient-vision-production-e784.up.railway.app';\"
+              /export const SOCKET_URL[\s\S]*?(?=\nexport|\n\/\/|$)/,
+              \"export const SOCKET_URL = 'wss://resilient-vision-production-e784.up.railway.app';\n\"
             );
             fs.writeFileSync('src/constants/config.js', c);
-            console.log('Patched API_BASE_URL to production');
+            console.log('API_BASE_URL patched to production');
           "
+
+      # Generate android/ folder from app.json + plugins
+      - name: Expo Prebuild (generate android folder)
+        run: npx expo prebuild --platform android --clean --no-install
 
       - name: Make Gradlew executable
         run: chmod +x android/gradlew
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon -x lint
         env:
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          ANDROID_HOME: /usr/local/lib/android/sdk
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: farmeasy-debug-apk
