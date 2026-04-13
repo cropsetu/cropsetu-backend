@@ -1,1070 +1,1795 @@
+/**
+ * AIRecommendation — Complete Crop Advisor Wizard
+ *
+ * Step 1 — Crop & Field Setup   : Select crop type, land size, previous crop
+ * Step 2 — Photo Scan            : Camera / Gallery capture (leaf, stem, root, field)
+ * Step 3 — Field Conditions      : Live weather + soil type selection
+ * Step 4 — AI Analysis Results   : Photo-based disease detection + full report
+ */
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, SafeAreaView, Alert, Animated, Dimensions,
-  StatusBar, Platform,
+  TextInput, Image, ActivityIndicator, StatusBar,
+  Animated, Alert, Platform, FlatList, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
-import axios from 'axios';
-import { getAIRecommendation } from '../../services/aiService';
+import * as ImagePicker from 'expo-image-picker';
+import { useLanguage } from '../../context/LanguageContext';
+import api from '../../services/api';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const { width: SCREEN_W } = Dimensions.get('window');
+const GREEN  = '#2D9162';
+const BLUE   = '#1565C0';
+const ORANGE = '#E65100';
+const RED    = '#C62828';
 
-// ─── AI COLOR PALETTE ─────────────────────────────────────────────────────────
-const AI = {
-  bg: '#060D1F',
-  bgCard: '#0F1A2E',
-  bgCardLight: '#162236',
-  neonGreen: '#00FF88',
-  neonBlue: '#00D4FF',
-  neonPurple: '#A855F7',
-  neonOrange: '#FF8C00',
-  border: '#00FF8825',
-  borderActive: '#00FF8870',
-  text: '#FFFFFF',
-  textSub: '#94A3B8',
-  textDim: '#475569',
-};
 
-// ─── ANIMATED AI ORB ─────────────────────────────────────────────────────────
-function AIOrb({ size = 130, isThinking = false }) {
-  const pulse1 = useRef(new Animated.Value(1)).current;
-  const pulse2 = useRef(new Animated.Value(1)).current;
-  const pulse3 = useRef(new Animated.Value(1)).current;
-  const rotate1 = useRef(new Animated.Value(0)).current;
-  const rotate2 = useRef(new Animated.Value(0)).current;
-  const glow = useRef(new Animated.Value(0.6)).current;
-  const iconScale = useRef(new Animated.Value(1)).current;
+// Translation keys for previous crop dropdown — rendered via t() inside component
+const PREV_CROP_KEYS = [
+  'ai.prevCropPlaceholder',
+  'ai.prevCropWheat',
+  'ai.prevCropRice',
+  'ai.prevCropPulses',
+  'ai.prevCropMustard',
+  'ai.prevCropMaize',
+  'ai.prevCropSorghum',
+  'ai.prevCropFallow',
+];
 
+// Translation keys for scan type chips — labels and hints rendered via t()
+const SCAN_TYPES = [
+  { id: 'leaf',  labelKey: 'ai.scanLeaf',  icon: 'leaf',         hintKey: 'ai.scanLeafHint'  },
+  { id: 'stem',  labelKey: 'ai.scanStem',  icon: 'git-commit',   hintKey: 'ai.scanStemHint'  },
+  { id: 'root',  labelKey: 'ai.scanRoot',  icon: 'git-branch',   hintKey: 'ai.scanRootHint'  },
+  { id: 'field', labelKey: 'ai.scanField', icon: 'image',        hintKey: 'ai.scanFieldHint' },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const sevColor = (s) => s === 'critical' ? RED : s === 'moderate' ? ORANGE : GREEN;
+const sevBg    = (s) => s === 'critical' ? '#FFEBEE' : s === 'moderate' ? '#FFF3E0' : '#E8F5E9';
+const sevLabelKey = (s) => s === 'critical' ? 'sevPillCritical' : s === 'moderate' ? 'sevPillModerate' : 'sevPillLow';
+const statColor = (s) => s === 'critical' ? RED : s === 'scheduled' ? BLUE : '#888';
+const statLabelKey = (s) => s === 'critical' ? 'statPillCritical' : s === 'scheduled' ? 'statPillScheduled' : 'statPillPending';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Futuristic animation primitives
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Single ambient particle that floats upward in a loop */
+function ParticleDot({ x, y, size = 4, color = GREEN, delay = 0, amplitude = 14 }) {
+  const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    // Breathing pulse rings
-    Animated.loop(Animated.sequence([
-      Animated.timing(pulse1, { toValue: 1.18, duration: 1600, useNativeDriver: true }),
-      Animated.timing(pulse1, { toValue: 1, duration: 1600, useNativeDriver: true }),
-    ])).start();
-
-    Animated.loop(Animated.sequence([
-      Animated.delay(400),
-      Animated.timing(pulse2, { toValue: 1.3, duration: 1800, useNativeDriver: true }),
-      Animated.timing(pulse2, { toValue: 1, duration: 1800, useNativeDriver: true }),
-    ])).start();
-
-    Animated.loop(Animated.sequence([
-      Animated.delay(800),
-      Animated.timing(pulse3, { toValue: 1.45, duration: 2000, useNativeDriver: true }),
-      Animated.timing(pulse3, { toValue: 1, duration: 2000, useNativeDriver: true }),
-    ])).start();
-
-    // Orbit rotations
-    Animated.loop(
-      Animated.timing(rotate1, { toValue: 1, duration: 4000, useNativeDriver: true })
-    ).start();
-    Animated.loop(
-      Animated.timing(rotate2, { toValue: 1, duration: 6000, useNativeDriver: true })
-    ).start();
-
-    // Glow breathe
-    Animated.loop(Animated.sequence([
-      Animated.timing(glow, { toValue: 1, duration: 1400, useNativeDriver: true }),
-      Animated.timing(glow, { toValue: 0.35, duration: 1400, useNativeDriver: true }),
-    ])).start();
-
-    // Icon bounce when thinking
-    if (isThinking) {
-      Animated.loop(Animated.sequence([
-        Animated.timing(iconScale, { toValue: 1.2, duration: 500, useNativeDriver: true }),
-        Animated.timing(iconScale, { toValue: 0.9, duration: 500, useNativeDriver: true }),
-      ])).start();
-    } else {
-      iconScale.setValue(1);
-    }
-  }, [isThinking]);
-
-  const spin1 = rotate1.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-  const spin2 = rotate2.interpolate({ inputRange: [0, 1], outputRange: ['360deg', '0deg'] });
-  const orbSize = size;
-
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1, duration: 2400 + delay * 120, delay, useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0, duration: 2400 + delay * 120, useNativeDriver: true }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, []);
+  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, -amplitude] });
+  const opacity    = anim.interpolate({ inputRange: [0, 0.2, 0.8, 1], outputRange: [0.1, 0.85, 0.85, 0.1] });
   return (
-    <View style={{ width: orbSize * 2.8, height: orbSize * 2.8, alignItems: 'center', justifyContent: 'center' }}>
-      {/* Outermost glow ring */}
-      <Animated.View style={{
-        position: 'absolute',
-        width: orbSize * 2.6,
-        height: orbSize * 2.6,
-        borderRadius: orbSize * 1.3,
-        borderWidth: 1,
-        borderColor: AI.neonGreen + '15',
-        opacity: pulse3,
-        transform: [{ scale: pulse3 }],
-      }} />
-
-      {/* Second glow ring */}
-      <Animated.View style={{
-        position: 'absolute',
-        width: orbSize * 2,
-        height: orbSize * 2,
-        borderRadius: orbSize,
-        borderWidth: 1.5,
-        borderColor: AI.neonBlue + '25',
-        transform: [{ scale: pulse2 }],
-        opacity: pulse2,
-      }} />
-
-      {/* Rotating dashed orbit 1 */}
-      <Animated.View style={{
-        position: 'absolute',
-        width: orbSize * 1.7,
-        height: orbSize * 1.7,
-        borderRadius: orbSize * 0.85,
-        borderWidth: 1.5,
-        borderColor: AI.neonGreen + '50',
-        borderStyle: 'dashed',
-        transform: [{ rotate: spin1 }],
-      }}>
-        {/* Orbit dot */}
-        <View style={{
-          position: 'absolute',
-          top: -5, left: '48%',
-          width: 10, height: 10, borderRadius: 5,
-          backgroundColor: AI.neonGreen,
-          shadowColor: AI.neonGreen,
-          shadowOpacity: 1,
-          shadowRadius: 6,
-          elevation: 8,
-        }} />
-      </Animated.View>
-
-      {/* Rotating dashed orbit 2 */}
-      <Animated.View style={{
-        position: 'absolute',
-        width: orbSize * 1.4,
-        height: orbSize * 1.4,
-        borderRadius: orbSize * 0.7,
-        borderWidth: 1,
-        borderColor: AI.neonPurple + '60',
-        borderStyle: 'dashed',
-        transform: [{ rotate: spin2 }],
-      }}>
-        <View style={{
-          position: 'absolute',
-          bottom: -4, right: '44%',
-          width: 8, height: 8, borderRadius: 4,
-          backgroundColor: AI.neonPurple,
-          shadowColor: AI.neonPurple,
-          shadowOpacity: 1,
-          shadowRadius: 5,
-          elevation: 8,
-        }} />
-      </Animated.View>
-
-      {/* Core orb */}
-      <Animated.View style={{
-        width: orbSize, height: orbSize, borderRadius: orbSize / 2,
-        transform: [{ scale: pulse1 }],
-        shadowColor: AI.neonGreen,
-        shadowOpacity: 0.8,
-        shadowRadius: 20,
-        elevation: 20,
-      }}>
-        <LinearGradient
-          colors={['#003322', '#004433', '#00FF8830']}
-          style={{
-            width: '100%', height: '100%',
-            borderRadius: orbSize / 2,
-            justifyContent: 'center', alignItems: 'center',
-            borderWidth: 2,
-            borderColor: AI.neonGreen + '80',
-          }}
-        >
-          {/* Inner glow */}
-          <View style={{
-            position: 'absolute',
-            width: orbSize * 0.7, height: orbSize * 0.7,
-            borderRadius: orbSize * 0.35,
-            backgroundColor: AI.neonGreen + '12',
-          }} />
-          <Animated.View style={{ transform: [{ scale: iconScale }] }}>
-            <Text style={{ fontSize: orbSize * 0.35 }}>🌾</Text>
-          </Animated.View>
-        </LinearGradient>
-      </Animated.View>
-    </View>
+    <Animated.View style={{
+      position: 'absolute', left: x, top: y,
+      width: size, height: size, borderRadius: size / 2,
+      backgroundColor: color, opacity, transform: [{ translateY }],
+    }} />
   );
 }
 
-// ─── PROCESSING SCREEN ────────────────────────────────────────────────────────
-function AIProcessingScreen({ cropName }) {
-  // Hooks must be declared individually — never inside loops or map()
-  const dot0 = useRef(new Animated.Value(0)).current;
-  const dot1 = useRef(new Animated.Value(0)).current;
-  const dot2 = useRef(new Animated.Value(0)).current;
-  const dot3 = useRef(new Animated.Value(0)).current;
-  const dot4 = useRef(new Animated.Value(0)).current;
-  const dots = [dot0, dot1, dot2, dot3, dot4];
-  const scanLine = useRef(new Animated.Value(0)).current;
-  const fadeIn = useRef(new Animated.Value(0)).current;
-
-  const steps = [
-    { label: 'Reading crop data...', icon: '🌱', delay: 0 },
-    { label: 'Analyzing weather patterns...', icon: '🌦️', delay: 800 },
-    { label: 'Checking soil compatibility...', icon: '🪨', delay: 1600 },
-    { label: 'Scanning disease symptoms...', icon: '🔬', delay: 2400 },
-    { label: 'Generating AI recommendation...', icon: '🤖', delay: 3200 },
-  ];
-  const [activeStep, setActiveStep] = useState(0);
-
+/** Ring of equally-spaced dots that rotates around its center */
+function OrbitRing({ size, radius, dotCount, dotSize, color, duration, reverse = false }) {
+  const rot = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(fadeIn, { toValue: 1, duration: 600, useNativeDriver: true }).start();
-
-    // Scan line
-    Animated.loop(Animated.sequence([
-      Animated.timing(scanLine, { toValue: 1, duration: 1800, useNativeDriver: true }),
-      Animated.timing(scanLine, { toValue: 0, duration: 1800, useNativeDriver: true }),
-    ])).start();
-
-    // Dot wave
-    dots.forEach((dot, i) => {
-      Animated.loop(Animated.sequence([
-        Animated.delay(i * 120),
-        Animated.timing(dot, { toValue: 1, duration: 400, useNativeDriver: true }),
-        Animated.timing(dot, { toValue: 0, duration: 400, useNativeDriver: true }),
-        Animated.delay((dots.length - i) * 120),
-      ])).start();
-    });
-
-    // Step progression
-    steps.forEach((s, i) => {
-      setTimeout(() => setActiveStep(i), s.delay + 400);
-    });
+    const loop = Animated.loop(
+      Animated.timing(rot, { toValue: reverse ? -1 : 1, duration, useNativeDriver: true })
+    );
+    loop.start();
+    return () => loop.stop();
   }, []);
-
-  const scanTranslate = scanLine.interpolate({ inputRange: [0, 1], outputRange: [0, 160] });
-
+  const spin = rot.interpolate({
+    inputRange:  reverse ? [-1, 0] : [0, 1],
+    outputRange: reverse ? ['-360deg', '0deg'] : ['0deg', '360deg'],
+  });
+  const center = size / 2;
   return (
-    <Animated.View style={[styles.processingContainer, { opacity: fadeIn }]}>
-      <AIOrb size={110} isThinking />
-
-      {/* Scanning frame */}
-      <View style={styles.scanFrame}>
-        <View style={[styles.scanCorner, { top: 0, left: 0, borderTopWidth: 2, borderLeftWidth: 2 }]} />
-        <View style={[styles.scanCorner, { top: 0, right: 0, borderTopWidth: 2, borderRightWidth: 2 }]} />
-        <View style={[styles.scanCorner, { bottom: 0, left: 0, borderBottomWidth: 2, borderLeftWidth: 2 }]} />
-        <View style={[styles.scanCorner, { bottom: 0, right: 0, borderBottomWidth: 2, borderRightWidth: 2 }]} />
-        <Animated.View style={[styles.scanLineBar, { transform: [{ translateY: scanTranslate }] }]} />
-      </View>
-
-      <Text style={styles.processingTitle}>AI Analyzing Your Farm</Text>
-      <Text style={styles.processingCrop}>{cropName || 'Your crop'}</Text>
-
-      {/* Step indicator */}
-      <View style={styles.stepsList}>
-        {steps.map((step, i) => (
-          <View key={i} style={[styles.stepItem, i < activeStep && { opacity: 0.4 }]}>
-            <View style={[styles.stepDot2, { backgroundColor: i <= activeStep ? AI.neonGreen : AI.textDim }]}>
-              {i < activeStep
-                ? <Ionicons name="checkmark" size={10} color={AI.bg} />
-                : <Text style={{ fontSize: 8 }}>{step.icon}</Text>
-              }
-            </View>
-            <Text style={[styles.stepItemText, i === activeStep && { color: AI.neonGreen }]}>
-              {step.label}
-            </Text>
-          </View>
-        ))}
-      </View>
-
-      {/* Loading dots */}
-      <View style={styles.dotsRow}>
-        {dots.map((dot, i) => (
-          <Animated.View key={i} style={[styles.loadingDot, {
-            opacity: dot,
-            transform: [{ scale: dot.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1.4] }) }],
-          }]} />
-        ))}
-      </View>
+    <Animated.View style={{ position: 'absolute', top: 0, left: 0, width: size, height: size, transform: [{ rotate: spin }] }}>
+      {Array.from({ length: dotCount }, (_, i) => {
+        const rad  = ((360 / dotCount) * i) * Math.PI / 180;
+        const left = center + radius * Math.cos(rad) - dotSize / 2;
+        const top  = center + radius * Math.sin(rad) - dotSize / 2;
+        return <View key={i} style={{ position: 'absolute', left, top, width: dotSize, height: dotSize, borderRadius: dotSize / 2, backgroundColor: color }} />;
+      })}
     </Animated.View>
   );
 }
 
-// ─── TYPEWRITER TEXT ──────────────────────────────────────────────────────────
-function TypewriterText({ text, style, delay = 0 }) {
-  const [displayed, setDisplayed] = useState('');
+// ─────────────────────────────────────────────────────────────────────────────
+// HeroBanner — Step 1 dark sphere header
+// ─────────────────────────────────────────────────────────────────────────────
+const HERO_P = [
+  { x: 16,            y: 24,  size: 3, color: GREEN,     delay: 0,    amplitude: 10 },
+  { x: SCREEN_W - 36, y: 18,  size: 4, color: '#4CAF50', delay: 400,  amplitude: 12 },
+  { x: 28,            y: 118, size: 3, color: '#81C784', delay: 900,  amplitude: 9  },
+  { x: SCREEN_W - 28, y: 104, size: 5, color: GREEN,     delay: 200,  amplitude: 14 },
+  { x: 22,            y: 72,  size: 2, color: '#A5D6A7', delay: 1200, amplitude: 8  },
+  { x: SCREEN_W - 50, y: 66,  size: 3, color: '#66BB6A', delay: 700,  amplitude: 11 },
+  { x: 58,            y: 14,  size: 2, color: '#4CAF50', delay: 550,  amplitude: 7  },
+  { x: SCREEN_W - 68, y: 128, size: 4, color: GREEN,     delay: 300,  amplitude: 13 },
+];
+
+function HeroBanner() {
+  const { t } = useLanguage();
+  const pulse  = useRef(new Animated.Value(0.92)).current;
+  const glowOp = useRef(new Animated.Value(0.35)).current;
+  const chipDotPulse = useRef(new Animated.Value(0.5)).current;
+
   useEffect(() => {
-    setDisplayed('');
-    let i = 0;
-    const timer = setTimeout(() => {
-      const interval = setInterval(() => {
-        if (i < text.length) {
-          setDisplayed(text.slice(0, ++i));
-        } else {
-          clearInterval(interval);
-        }
-      }, 18);
-      return () => clearInterval(interval);
-    }, delay);
-    return () => clearTimeout(timer);
-  }, [text, delay]);
-  return <Text style={style}>{displayed}</Text>;
+    Animated.loop(Animated.sequence([
+      Animated.timing(pulse,  { toValue: 1.07, duration: 1800, useNativeDriver: true }),
+      Animated.timing(pulse,  { toValue: 0.92, duration: 1800, useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(glowOp, { toValue: 0.9,  duration: 1800, useNativeDriver: true }),
+      Animated.timing(glowOp, { toValue: 0.35, duration: 1800, useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(chipDotPulse, { toValue: 1,   duration: 600, useNativeDriver: true }),
+      Animated.timing(chipDotPulse, { toValue: 0.3, duration: 600, useNativeDriver: true }),
+    ])).start();
+  }, []);
+
+  return (
+    <View style={HB.wrap}>
+      <View style={[StyleSheet.absoluteFillObject, { backgroundColor: '#061810' }]} />
+
+      {/* Background dot grid */}
+      {Array.from({ length: 35 }).map((_, i) => (
+        <View key={i} style={{
+          position: 'absolute',
+          left: (i % 7) * 52 + 10,
+          top:  Math.floor(i / 7) * 34 + 8,
+          width: 2.5, height: 2.5, borderRadius: 1.25,
+          backgroundColor: GREEN + '22',
+        }} />
+      ))}
+
+      {/* Ambient particles */}
+      {HERO_P.map((p, i) => <ParticleDot key={i} {...p} />)}
+
+      {/* Content row: sphere + text */}
+      <View style={HB.contentRow}>
+        {/* 3-ring orbit sphere */}
+        <View style={HB.sphereWrap}>
+          <OrbitRing size={140} radius={62} dotCount={8} dotSize={7}  color={GREEN}     duration={9000}         />
+          <OrbitRing size={140} radius={45} dotCount={6} dotSize={5}  color={'#4CAF50'} duration={6200} reverse />
+          <OrbitRing size={140} radius={28} dotCount={4} dotSize={4}  color={'#81C784'} duration={4200}         />
+          {/* Glow ring */}
+          <Animated.View style={[HB.glowRing, { opacity: glowOp }]} />
+          {/* Center leaf */}
+          <Animated.View style={[HB.centerIcon, { transform: [{ scale: pulse }] }]}>
+            <View style={HB.centerGrad}>
+              <Ionicons name="leaf" size={28} color="#fff" />
+            </View>
+          </Animated.View>
+        </View>
+
+        {/* Text */}
+        <View style={HB.textArea}>
+          <View style={HB.aiChip}>
+            <Animated.View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: GREEN, opacity: chipDotPulse }} />
+            <Text style={HB.aiChipTxt}>{t('ai.aiActive')}</Text>
+          </View>
+          <Text style={HB.heroTitle}>{t('ai.heroTitle')}</Text>
+          <Text style={HB.heroSub}>{t('ai.heroSub')}</Text>
+        </View>
+      </View>
+    </View>
+  );
 }
 
-// ─── HUD STEP INDICATOR ───────────────────────────────────────────────────────
-function HUDStepBar({ step, total }) {
+// ─────────────────────────────────────────────────────────────────────────────
+// ScanModeBanner — Step 2 photo-capture header
+// ─────────────────────────────────────────────────────────────────────────────
+function ScanModeBanner({ cropName }) {
+  const { t } = useLanguage();
+  const sweepAnim = useRef(new Animated.Value(0)).current;
+  const dotPulse  = useRef(new Animated.Value(0.4)).current;
+
+  useEffect(() => {
+    Animated.loop(Animated.sequence([
+      Animated.timing(dotPulse, { toValue: 1,   duration: 700, useNativeDriver: true }),
+      Animated.timing(dotPulse, { toValue: 0.4, duration: 700, useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(sweepAnim, { toValue: 1,   duration: 1800, useNativeDriver: true }),
+      Animated.delay(500),
+      Animated.timing(sweepAnim, { toValue: 0,   duration: 0,    useNativeDriver: true }),
+      Animated.delay(400),
+    ])).start();
+  }, []);
+
+  const sweepY  = sweepAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 104] });
+  const sweepOp = sweepAnim.interpolate({ inputRange: [0, 0.05, 0.88, 1], outputRange: [0, 0.75, 0.75, 0] });
+
+  const BL = 20; const BW = 2.5; const BC = GREEN;
+
   return (
-    <View style={styles.hudBar}>
-      <View style={styles.hudLeft}>
-        <View style={styles.hudSignal}>
-          {[1, 2, 3].map(i => (
-            <View key={i} style={[styles.hudSignalBar, { height: i * 5 + 4, backgroundColor: step >= i ? AI.neonGreen : AI.textDim }]} />
+    <View style={SMB.wrap}>
+      <View style={[StyleSheet.absoluteFillObject, { backgroundColor: '#061810' }]} />
+
+      {/* Dot grid */}
+      {Array.from({ length: 24 }).map((_, i) => (
+        <View key={i} style={{
+          position: 'absolute',
+          left: (i % 6) * 55 + 16,
+          top:  Math.floor(i / 6) * 30 + 10,
+          width: 2, height: 2, borderRadius: 1,
+          backgroundColor: GREEN + '1E',
+        }} />
+      ))}
+
+      {/* Scan frame box (104 × 104) */}
+      <View style={SMB.frameWrap}>
+        {/* TL */}
+        <View style={{ position: 'absolute', top: 0, left: 0 }}>
+          <View style={{ width: BL, height: BW, backgroundColor: BC, borderRadius: 1 }} />
+          <View style={{ width: BW, height: BL, backgroundColor: BC, marginTop: -BW, borderRadius: 1 }} />
+        </View>
+        {/* TR */}
+        <View style={{ position: 'absolute', top: 0, right: 0, alignItems: 'flex-end' }}>
+          <View style={{ width: BL, height: BW, backgroundColor: BC, borderRadius: 1 }} />
+          <View style={{ width: BW, height: BL, backgroundColor: BC, marginTop: -BW, borderRadius: 1 }} />
+        </View>
+        {/* BL */}
+        <View style={{ position: 'absolute', bottom: 0, left: 0 }}>
+          <View style={{ width: BW, height: BL, backgroundColor: BC, borderRadius: 1 }} />
+          <View style={{ width: BL, height: BW, backgroundColor: BC, borderRadius: 1 }} />
+        </View>
+        {/* BR */}
+        <View style={{ position: 'absolute', bottom: 0, right: 0, alignItems: 'flex-end' }}>
+          <View style={{ width: BW, height: BL, backgroundColor: BC, borderRadius: 1 }} />
+          <View style={{ width: BL, height: BW, backgroundColor: BC, borderRadius: 1 }} />
+        </View>
+        {/* Center icon */}
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <Ionicons name="leaf" size={22} color={GREEN + '70'} />
+        </View>
+        {/* Sweep line */}
+        <Animated.View style={{
+          position: 'absolute', left: 0, right: 0, height: 2,
+          backgroundColor: GREEN, opacity: sweepOp,
+          transform: [{ translateY: sweepY }],
+          shadowColor: GREEN, shadowOpacity: 0.8, shadowRadius: 6, elevation: 2,
+        }} />
+      </View>
+
+      {/* Text */}
+      <View style={SMB.textArea}>
+        <View style={SMB.chip}>
+          <Animated.View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: GREEN, opacity: dotPulse }} />
+          <Text style={SMB.chipTxt}>{t('ai.scanMode')}</Text>
+        </View>
+        <Text style={SMB.title}>{t('ai.photographCrop', { crop: cropName })}</Text>
+        <Text style={SMB.sub}>{t('ai.captureHint')}</Text>
+      </View>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step Indicator (4 steps)
+// ─────────────────────────────────────────────────────────────────────────────
+function StepIndicator({ current }) {
+  const { t } = useLanguage();
+  const labels = [t('ai.stepCrop'), t('ai.stepPhotos'), t('ai.stepConditions'), t('ai.stepResults')];
+  return (
+    <View style={S.stepWrap}>
+      {[1, 2, 3, 4].map((s, i) => (
+        <React.Fragment key={s}>
+          <View style={S.stepItem}>
+            <View style={[S.stepDot, current >= s && S.stepDotActive, current > s && S.stepDotDone]}>
+              {current > s
+                ? <Ionicons name="checkmark" size={10} color="#fff" />
+                : <Text style={[S.stepNum, current >= s && S.stepNumActive]}>{s}</Text>}
+            </View>
+            <Text style={[S.stepLabel, current >= s && S.stepLabelActive]}>{labels[i]}</Text>
+          </View>
+          {s < 4 && <View style={[S.stepLine, current > s && S.stepLineActive]} />}
+        </React.Fragment>
+      ))}
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI Analyzing overlay (shown between Step 3 → Step 4)
+// ─────────────────────────────────────────────────────────────────────────────
+const OVERLAY_P = [
+  { x: 22,            y: 70,  size: 3, color: GREEN,     delay: 0,   amplitude: 16 },
+  { x: SCREEN_W - 32, y: 90,  size: 4, color: '#4CAF50', delay: 400, amplitude: 14 },
+  { x: 36,            y: 200, size: 3, color: GREEN,     delay: 700, amplitude: 12 },
+  { x: SCREEN_W - 48, y: 220, size: 5, color: '#66BB6A', delay: 200, amplitude: 18 },
+  { x: 20,            y: 340, size: 3, color: GREEN,     delay: 900, amplitude: 13 },
+  { x: SCREEN_W - 36, y: 360, size: 3, color: '#4CAF50', delay: 600, amplitude: 15 },
+];
+
+function AnalyzingOverlay({ visible, photos }) {
+  const { t } = useLanguage();
+  const pulse    = useRef(new Animated.Value(0.6)).current;
+  const progress = useRef(new Animated.Value(0)).current;
+  const glowOp   = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    progress.setValue(0);
+    Animated.timing(progress, { toValue: 1, duration: 2800, useNativeDriver: false }).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(pulse,  { toValue: 1,   duration: 700, useNativeDriver: true }),
+      Animated.timing(pulse,  { toValue: 0.6, duration: 700, useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(glowOp, { toValue: 0.85, duration: 900, useNativeDriver: true }),
+      Animated.timing(glowOp, { toValue: 0.3,  duration: 900, useNativeDriver: true }),
+    ])).start();
+  }, [visible]);
+
+  if (!visible) return null;
+
+  const barW = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] });
+
+  return (
+    <View style={S.overlayRoot}>
+      <View style={S.overlayGradient}>
+
+        {/* Background dot grid */}
+        {Array.from({ length: 48 }).map((_, i) => (
+          <View key={i} style={{
+            position: 'absolute',
+            left: (i % 8) * 44 + 14,
+            top:  Math.floor(i / 8) * 56 + 20,
+            width: 2, height: 2, borderRadius: 1,
+            backgroundColor: GREEN + '18',
+          }} />
+        ))}
+
+        {/* Ambient particles */}
+        {OVERLAY_P.map((p, i) => <ParticleDot key={i} {...p} />)}
+
+        {/* 3-ring orbit sphere */}
+        <View style={S.overlaySphereWrap}>
+          <OrbitRing size={190} radius={84} dotCount={10} dotSize={8}  color={GREEN}     duration={8500}         />
+          <OrbitRing size={190} radius={60} dotCount={7}  dotSize={5}  color={'#4CAF50'} duration={5800} reverse />
+          <OrbitRing size={190} radius={38} dotCount={4}  dotSize={4}  color={'#81C784'} duration={3900}         />
+          {/* Outer glow */}
+          <Animated.View style={[S.overlayGlow, { opacity: glowOp }]} />
+          {/* Center icon */}
+          <Animated.View style={[S.scanIconWrap, { transform: [{ scale: pulse }] }]}>
+            <Ionicons name="leaf" size={44} color={GREEN} />
+          </Animated.View>
+        </View>
+
+        <Text style={S.overlayTitle}>{t('ai.analyzing')}</Text>
+        <Text style={S.overlaySub}>{t('ai.analyzingPhotos', { count: photos.length })}</Text>
+
+        {/* Progress bar */}
+        <View style={S.progressBarWrap}>
+          <Animated.View style={[S.progressBarFill, { width: barW }]} />
+        </View>
+
+        {/* Step hints */}
+        {[t('ai.analyzingStep1'), t('ai.analyzingStep2'), t('ai.analyzingStep3'), t('ai.analyzingStep4')].map((txt, i) => (
+          <View key={i} style={S.overlayStepRow}>
+            <Ionicons name="checkmark-circle" size={14} color={GREEN + 'AA'} />
+            <Text style={S.overlayStepTxt}>{txt}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 1 — Crop & Field Setup
+// ─────────────────────────────────────────────────────────────────────────────
+function Step1({ onNext }) {
+  const { t } = useLanguage();
+  const [crops,        setCrops]        = useState([]);
+  const [cropsLoading, setCropsLoading] = useState(true);
+  const [selectedCrop, setSelectedCrop] = useState(null);
+  const [landSize,     setLandSize]     = useState('');
+  const [prevCropIdx,  setPrevCropIdx]  = useState(0);
+  const [showMenu,     setShowMenu]     = useState(false);
+
+  useEffect(() => {
+    const fallbackCrops = [
+      { id: 1, name: 'Tomato', icon: '🍅' }, { id: 2, name: 'Wheat', icon: '🌾' },
+      { id: 3, name: 'Rice', icon: '🌾' },   { id: 4, name: 'Cotton', icon: '🪴' },
+      { id: 5, name: 'Onion', icon: '🧅' },  { id: 6, name: 'Soybean', icon: '🫘' },
+      { id: 7, name: 'Potato', icon: '🥔' }, { id: 8, name: 'Maize', icon: '🌽' },
+    ];
+    api.get('/agristore/crops')
+      .then(({ data }) => setCrops(data.data?.length ? data.data : fallbackCrops))
+      .catch(() => setCrops(fallbackCrops))
+      .finally(() => setCropsLoading(false));
+  }, []);
+
+  const prevCropOptions = PREV_CROP_KEYS.map(k => t(k));
+  const canContinue = !!selectedCrop;
+
+  if (cropsLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={GREEN} />
+      </View>
+    );
+  }
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={S.scrollContent}>
+      <HeroBanner />
+      <Text style={[S.stepTitle, { marginTop: 20 }]}>{t('ai.whatAreYouGrowing')}</Text>
+      <Text style={S.stepSub}>{t('ai.cropAdvisorDesc')}</Text>
+
+      {/* Crop grid */}
+      <View style={S.rowBetween}>
+        <Text style={S.sectionLabel}>{t('ai.selectCurrentCrop')}</Text>
+        <View style={S.aiBadge}><Ionicons name="sparkles" size={11} color={BLUE} /><Text style={S.aiBadgeTxt}>{t('ai.aiReady')}</Text></View>
+      </View>
+
+      <View style={S.cropGrid}>
+        {crops.map((crop) => {
+          const sel = selectedCrop?.id === crop.id;
+          return (
+            <TouchableOpacity
+              key={crop.id}
+              style={[S.cropCard, sel && { borderColor: GREEN, borderWidth: 2.5 }]}
+              onPress={() => setSelectedCrop(crop)}
+              activeOpacity={0.85}
+            >
+              <Image source={{ uri: crop.image }} style={S.cropImg} resizeMode="cover" />
+              {sel && (
+                <View style={S.cropCheckBadge}>
+                  <Ionicons name="checkmark-circle" size={22} color={GREEN} />
+                </View>
+              )}
+              <View style={S.cropFooter}>
+                <Text style={[S.cropName, sel && { color: GREEN, fontWeight: '800' }]}>{crop.name}</Text>
+                <Text style={S.cropSeason}>{crop.season.split('(')[0].trim()}</Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+
+        {/* Other crop card */}
+        <TouchableOpacity
+          style={[S.cropCard, S.otherCropCard]}
+          onPress={() => Alert.alert(t('ai.comingSoon'), t('ai.comingSoonMsg'))}
+          activeOpacity={0.8}
+        >
+          <View style={S.otherCropIconWrap}>
+            <Ionicons name="add-circle-outline" size={30} color="#AAA" />
+          </View>
+          <View style={S.cropFooter}>
+            <Text style={S.otherCropTxt}>{t('ai.otherCrop')}</Text>
+            <Text style={S.cropSeason}>{t('ai.customEntry')}</Text>
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Selected crop pill */}
+      {selectedCrop && (
+        <View style={S.selectedPill}>
+          <View style={[S.selectedPillDot, { backgroundColor: selectedCrop.color }]} />
+          <Text style={S.selectedPillTxt}>
+            {selectedCrop.name} · {t('ai.knownCritical', { count: (selectedCrop.diseases || []).filter(d => d.severity === 'critical').length })}
+          </Text>
+        </View>
+      )}
+
+      {/* Land size */}
+      <Text style={[S.sectionLabel, { marginTop: 22 }]}>{t('ai.landSize')}</Text>
+      <View style={S.inputRow}>
+        <Ionicons name="resize-outline" size={18} color="#999" style={{ marginRight: 10 }} />
+        <TextInput
+          style={S.textInput}
+          placeholder={t('ai.landSizePlaceholder')}
+          placeholderTextColor="#BBB"
+          keyboardType="decimal-pad"
+          value={landSize}
+          onChangeText={setLandSize}
+        />
+        <Text style={S.inputUnit}>{t('ai.acres')}</Text>
+      </View>
+
+      {/* Previous crop */}
+      <Text style={[S.sectionLabel, { marginTop: 18 }]}>{t('ai.previousCrop')}</Text>
+      <TouchableOpacity style={S.dropdown} onPress={() => setShowMenu(v => !v)}>
+        <Ionicons name="time-outline" size={18} color="#999" style={{ marginRight: 10 }} />
+        <Text style={[S.dropdownTxt, prevCropIdx === 0 && { color: '#BBB' }]}>
+          {prevCropOptions[prevCropIdx]}
+        </Text>
+        <Ionicons name={showMenu ? 'chevron-up' : 'chevron-down'} size={17} color="#888" />
+      </TouchableOpacity>
+      {showMenu && (
+        <View style={S.dropdownMenu}>
+          {prevCropOptions.slice(1).map((pc, i) => (
+            <TouchableOpacity
+              key={i}
+              style={[S.dropdownItem, i === prevCropOptions.length - 2 && { borderBottomWidth: 0 }]}
+              onPress={() => { setPrevCropIdx(i + 1); setShowMenu(false); }}
+            >
+              <Text style={[S.dropdownItemTxt, prevCropIdx === i + 1 && { color: GREEN, fontWeight: '700' }]}>
+                {pc}
+              </Text>
+              {prevCropIdx === i + 1 && <Ionicons name="checkmark" size={14} color={GREEN} />}
+            </TouchableOpacity>
           ))}
         </View>
-        <Text style={styles.hudLabel}>FARM<Text style={{ color: AI.neonGreen }}>AI</Text></Text>
-      </View>
-      <View style={styles.hudSteps}>
-        {Array.from({ length: total }, (_, i) => (
-          <React.Fragment key={i}>
-            <View style={[styles.hudStepDot, {
-              backgroundColor: i + 1 <= step ? AI.neonGreen : AI.textDim,
-              shadowColor: i + 1 === step ? AI.neonGreen : 'transparent',
-              shadowOpacity: 1, shadowRadius: 6,
-            }]}>
-              {i + 1 < step
-                ? <Ionicons name="checkmark" size={10} color={AI.bg} />
-                : <Text style={[styles.hudStepNum, { color: i + 1 <= step ? AI.bg : AI.textDim }]}>{i + 1}</Text>
-              }
-            </View>
-            {i < total - 1 && (
-              <View style={[styles.hudStepLine, { backgroundColor: i + 1 < step ? AI.neonGreen : AI.textDim }]} />
-            )}
-          </React.Fragment>
-        ))}
-      </View>
-      <Text style={styles.hudVersion}>v2.0</Text>
-    </View>
-  );
-}
+      )}
 
-// ─── GLOWING CHIP ─────────────────────────────────────────────────────────────
-function GlowChip({ label, selected, onPress }) {
-  return (
-    <TouchableOpacity
-      style={[styles.glowChip, selected && styles.glowChipActive]}
-      onPress={onPress}
-      activeOpacity={0.75}
-    >
-      {selected && <View style={styles.glowChipDot} />}
-      <Text style={[styles.glowChipText, selected && styles.glowChipTextActive]}>{label}</Text>
-    </TouchableOpacity>
-  );
-}
-
-// ─── RESULT CARD ─────────────────────────────────────────────────────────────
-function ResultCard({ title, icon, color, children, delay = 0 }) {
-  const slideUp = useRef(new Animated.Value(40)).current;
-  const fadeIn = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    setTimeout(() => {
-      Animated.parallel([
-        Animated.timing(slideUp, { toValue: 0, duration: 500, useNativeDriver: true }),
-        Animated.timing(fadeIn, { toValue: 1, duration: 500, useNativeDriver: true }),
-      ]).start();
-    }, delay);
-  }, []);
-
-  return (
-    <Animated.View style={[styles.resultCard, { borderColor: color + '50', opacity: fadeIn, transform: [{ translateY: slideUp }] }]}>
-      <LinearGradient colors={[color + '18', color + '06']} style={styles.resultCardGradient}>
-        <View style={styles.resultCardHeader}>
-          <View style={[styles.resultCardIcon, { backgroundColor: color + '25', borderColor: color + '60' }]}>
-            <Text style={{ fontSize: 20 }}>{icon}</Text>
+      {/* AI info box */}
+      {selectedCrop && (
+        <View style={S.infoBox}>
+          <View style={[S.infoBoxIcon, { backgroundColor: GREEN + '20' }]}>
+            <Ionicons name="leaf" size={18} color={GREEN} />
           </View>
-          <Text style={[styles.resultCardTitle, { color }]}>{title}</Text>
-          <View style={[styles.resultCardBadge, { backgroundColor: color + '30' }]}>
-            <View style={[styles.liveDot, { backgroundColor: color }]} />
-            <Text style={[styles.liveText, { color }]}>AI</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.infoBoxTitle, { color: GREEN }]}>{t('ai.cropDetected')}</Text>
+            <Text style={S.infoBoxTxt}>{t('ai.cropDetectedDesc', { name: selectedCrop.name, count: (selectedCrop.diseases || []).length })}</Text>
           </View>
         </View>
-        {children}
-      </LinearGradient>
-    </Animated.View>
+      )}
+
+      <TouchableOpacity
+        style={[S.primaryBtn, !canContinue && S.btnDisabled]}
+        disabled={!canContinue}
+        onPress={() => onNext(selectedCrop, landSize, prevCropIdx > 0 ? prevCropOptions[prevCropIdx] : null)}
+      >
+        <Ionicons name="camera" size={18} color="#fff" style={{ marginRight: 8 }} />
+        <Text style={S.primaryBtnTxt}>{t('ai.nextPhotograph')}</Text>
+      </TouchableOpacity>
+    </ScrollView>
   );
 }
 
-// ─── MAIN SCREEN ──────────────────────────────────────────────────────────────
-const CROPS = ['Wheat', 'Rice/Paddy', 'Tomato', 'Onion', 'Soybean', 'Cotton', 'Sugarcane', 'Maize', 'Potato', 'Groundnut'];
-const GROWTH_STAGES = ['Seedling', 'Vegetative', 'Flowering', 'Fruiting / Grain Fill', 'Harvesting'];
-const SOILS = ['Black (Clay)', 'Red (Laterite)', 'Sandy Loam', 'Loamy', 'Alluvial'];
-const PROBLEMS = ['Yellow Leaves', 'Wilting', 'White Powder', 'Black Spots', 'Holes in Leaves', 'Stunted Growth', 'Root Rot', 'No Visible Problem'];
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 2 — Photo Scan
+// ─────────────────────────────────────────────────────────────────────────────
+function Step2({ crop, onNext, onBack }) {
+  const { t } = useLanguage();
+  const [photos,       setPhotos]       = useState([]);
+  const [activeScan,   setActiveScan]   = useState('leaf');
+  const maxPhotos = 4;
 
-export default function AIRecommendation({ navigation }) {
-  const [step, setStep] = useState(0);   // 0=intro, 1-3=steps, 4=processing, 5=results
-  const [loading, setLoading] = useState(false);
-  const [recommendation, setRecommendation] = useState(null);
-  const [cropImage, setCropImage] = useState(null);
-  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const requestPerms = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const { status: camStatus } = await ImagePicker.requestCameraPermissionsAsync();
+    return status === 'granted' && camStatus === 'granted';
+  };
 
-  const [form, setForm] = useState({
-    crop: '', growthStage: '', pincode: '',
-    soilType: '', landSize: '', problem: '',
-    irrigation: '', previousCrop: '', symptoms: '',
-  });
-  const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const takePhoto = async () => {
+    if (photos.length >= maxPhotos) {
+      Alert.alert(t('ai.limitReached'), t('ai.limitReachedMsg', { max: maxPhotos }));
+      return;
+    }
+    const ok = await requestPerms();
+    if (!ok) { Alert.alert(t('ai.permissionRequired'), t('ai.cameraPermission')); return; }
 
-  // Real weather from Open-Meteo (free, no key needed)
-  const [realWeather, setRealWeather] = useState({
-    temp: '--°C', humidity: '--%', rainfall: '--', forecast: 'Detecting location…',
-  });
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: 'images',
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.85,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      setPhotos(prev => [...prev, { uri: result.assets[0].uri, type: activeScan, id: Date.now().toString() }]);
+    }
+  };
+
+  const pickPhoto = async () => {
+    if (photos.length >= maxPhotos) {
+      Alert.alert(t('ai.limitReached'), t('ai.limitReachedMsg', { max: maxPhotos }));
+      return;
+    }
+    const ok = await requestPerms();
+    if (!ok) { Alert.alert(t('ai.permissionRequired'), t('ai.galleryPermission')); return; }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.85,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      setPhotos(prev => [...prev, { uri: result.assets[0].uri, type: activeScan, id: Date.now().toString() }]);
+    }
+  };
+
+  const removePhoto = (id) => setPhotos(prev => prev.filter(p => p.id !== id));
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={S.scrollContent}>
+      <ScanModeBanner cropName={crop.name} />
+      <Text style={[S.stepTitle, { marginTop: 20 }]}>{t('ai.photographYourCrop')}</Text>
+      <Text style={S.stepSub}>{t('ai.photographDesc')}</Text>
+
+      {/* How-to tips */}
+      <View style={S.tipsBanner}>
+        <Ionicons name="bulb-outline" size={16} color={ORANGE} />
+        <Text style={S.tipsBannerTxt}>
+          <Text style={{ fontWeight: '800', color: ORANGE }}>{t('ai.photoTips')} </Text>
+          {t('ai.photoTipsText')}
+        </Text>
+      </View>
+
+      {/* Scan type selector */}
+      <Text style={S.sectionLabel}>{t('ai.selectScanType')}</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 16 }}>
+        <View style={{ flexDirection: 'row', gap: 10, paddingRight: 16 }}>
+          {SCAN_TYPES.map((st) => {
+            const active = activeScan === st.id;
+            return (
+              <TouchableOpacity
+                key={st.id}
+                style={[S.scanTypeChip, active && S.scanTypeChipActive]}
+                onPress={() => setActiveScan(st.id)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name={st.icon} size={15} color={active ? '#fff' : '#666'} />
+                <Text style={[S.scanTypeLabel, active && { color: '#fff' }]}>{t(st.labelKey)}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </ScrollView>
+
+      {/* Hint for selected scan type */}
+      <Text style={S.scanHint}>
+        {t(SCAN_TYPES.find(s => s.id === activeScan)?.hintKey || 'ai.scanLeafHint')}
+      </Text>
+
+      {/* Capture buttons */}
+      <View style={S.captureRow}>
+        <TouchableOpacity style={S.captureBtn} onPress={takePhoto} activeOpacity={0.85}>
+          <View style={S.captureBtnGrad}>
+            <Ionicons name="camera" size={24} color="#fff" />
+            <Text style={S.captureBtnTxt}>{t('ai.takePhoto')}</Text>
+          </View>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[S.captureBtn, S.captureBtnOutline]} onPress={pickPhoto} activeOpacity={0.85}>
+          <Ionicons name="images-outline" size={24} color={GREEN} />
+          <Text style={[S.captureBtnTxt, { color: GREEN }]}>{t('ai.uploadPhoto')}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Photo count indicator */}
+      <View style={S.photoCountRow}>
+        <Text style={S.photoCountTxt}>{t('ai.photosCaptured', { count: photos.length, max: maxPhotos })}</Text>
+        <View style={S.photoCountBar}>
+          {[...Array(maxPhotos)].map((_, i) => (
+            <View key={i} style={[S.photoCountDot, i < photos.length && S.photoCountDotFilled]} />
+          ))}
+        </View>
+      </View>
+
+      {/* Captured photos */}
+      {photos.length > 0 && (
+        <>
+          <Text style={S.sectionLabel}>{t('ai.capturedPhotos')}</Text>
+          <View style={S.photoGrid}>
+            {photos.map((photo) => (
+              <View key={photo.id} style={S.photoThumb}>
+                <Image source={{ uri: photo.uri }} style={S.photoThumbImg} resizeMode="cover" />
+                {/* Scan type tag */}
+                <View style={S.photoTag}>
+                  <Text style={S.photoTagTxt}>{t(SCAN_TYPES.find(s => s.id === photo.type)?.labelKey || 'ai.scanLeaf')}</Text>
+                </View>
+                {/* AI scan indicator */}
+                <View style={S.photoAiTag}>
+                  <Ionicons name="scan" size={10} color={GREEN} />
+                  <Text style={S.photoAiTxt}>{t('ai.aiScan')}</Text>
+                </View>
+                {/* Remove button */}
+                <TouchableOpacity style={S.photoRemove} onPress={() => removePhoto(photo.id)}>
+                  <Ionicons name="close-circle" size={20} color="#fff" />
+                </TouchableOpacity>
+              </View>
+            ))}
+            {/* Add more placeholder */}
+            {photos.length < maxPhotos && (
+              <TouchableOpacity style={S.photoAddMore} onPress={takePhoto}>
+                <Ionicons name="add" size={22} color="#CCC" />
+                <Text style={S.photoAddMoreTxt}>{t('ai.addMore')}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </>
+      )}
+
+      {/* Skip note */}
+      {photos.length === 0 && (
+        <View style={[S.infoBox, { borderColor: BLUE + '40', backgroundColor: '#EFF6FF' }]}>
+          <View style={[S.infoBoxIcon, { backgroundColor: BLUE + '20' }]}>
+            <Ionicons name="information-circle" size={18} color={BLUE} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.infoBoxTitle, { color: BLUE }]}>{t('ai.whyPhotos')}</Text>
+            <Text style={S.infoBoxTxt}>{t('ai.whyPhotosTxt')}</Text>
+          </View>
+        </View>
+      )}
+
+      {photos.length > 0 && (
+        <View style={[S.infoBox, { borderColor: GREEN + '40', backgroundColor: '#E8F5E9' }]}>
+          <View style={[S.infoBoxIcon, { backgroundColor: GREEN + '20' }]}>
+            <Ionicons name="checkmark-circle" size={18} color={GREEN} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.infoBoxTitle, { color: GREEN }]}>{t('ai.readyToScan')}</Text>
+            <Text style={S.infoBoxTxt}>{t('ai.readyToScanTxt', { count: photos.length, crop: crop.name, diseases: (crop.diseases || []).length })}</Text>
+          </View>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[S.primaryBtn, { backgroundColor: ORANGE }]}
+        onPress={() => onNext(photos)}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="flask" size={18} color="#fff" style={{ marginRight: 8 }} />
+        <Text style={S.primaryBtnTxt}>
+          {photos.length > 0 ? t('ai.nextConditions') : t('ai.skipPhotos')}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={S.backBtn} onPress={onBack}>
+        <Ionicons name="arrow-back" size={15} color="#888" />
+        <Text style={S.backBtnTxt}>{t('ai.backToCrop')}</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 3 — Field Conditions (Weather + Soil)
+// ─────────────────────────────────────────────────────────────────────────────
+function Step3({ crop, photos, onNext, onBack }) {
+  const { t } = useLanguage();
+  const [soilType,     setSoilType]     = useState(null);
+  const [soils,        setSoils]        = useState([]);
+  const [soilsLoading, setSoilsLoading] = useState(true);
+  const [weather,      setWeather]      = useState(null);
+  const [loadingWx,    setLoadingWx]    = useState(true);
+
+  useEffect(() => {
+    const fallbackSoils = [
+      { id: 1, name: 'Black (Regur)', nameHi: 'काली मिट्टी', desc: 'High moisture retention, ideal for cotton & soybean' },
+      { id: 2, name: 'Red Loam',      nameHi: 'लाल मिट्टी',  desc: 'Well-drained, good for vegetables & pulses' },
+      { id: 3, name: 'Alluvial',      nameHi: 'जलोढ़ मिट्टी', desc: 'Highly fertile, excellent for wheat & rice' },
+      { id: 4, name: 'Sandy Loam',    nameHi: 'रेतीली मिट्टी', desc: 'Fast-draining, suitable for root crops & groundnut' },
+      { id: 5, name: 'Clay',          nameHi: 'चिकनी मिट्टी', desc: 'Heavy soil, retains water, good for paddy' },
+    ];
+    api.get('/agristore/soils')
+      .then(({ data }) => setSoils(data.data?.length ? data.data : fallbackSoils))
+      .catch(() => setSoils(fallbackSoils))
+      .finally(() => setSoilsLoading(false));
+  }, []);
 
   useEffect(() => {
     (async () => {
       try {
         let lat = 18.52, lon = 73.86;
-
-        // Check existing permission — do NOT request it here so WeatherHome's GPS is unaffected
-        const { status } = await Location.getForegroundPermissionsAsync();
+        const { status } = await Location.requestForegroundPermissionsAsync();
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
           lat = loc.coords.latitude;
           lon = loc.coords.longitude;
-
-          // Silently auto-fill pincode (not shown to user)
-          try {
-            const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-            const pc = places[0]?.postalCode?.replace(/\D/g, '').slice(0, 6) || '';
-            if (pc.length === 6) {
-              update('pincode', pc);
-            }
-          } catch { /* falls back to Pune default in aiService */ }
         }
-
-        const { data } = await axios.get('https://api.open-meteo.com/v1/forecast', {
-          params: {
-            latitude: lat, longitude: lon,
-            current: 'temperature_2m,relative_humidity_2m,precipitation,weather_code',
-            daily: 'precipitation_probability_max',
-            forecast_days: 2,
-            timezone: 'Asia/Kolkata',
-          },
-          timeout: 8000,
-        });
-        const c = data.current;
-        const rainPct = data.daily?.precipitation_probability_max?.[1] ?? 0;
-        setRealWeather({
-          temp: `${Math.round(c.temperature_2m)}°C`,
-          humidity: `${c.relative_humidity_2m}%`,
-          rainfall: `${c.precipitation ?? 0} mm today`,
-          forecast: rainPct > 50
-            ? `Rain likely tomorrow (${rainPct}%)`
-            : 'No significant rain expected',
+        const url =
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+          `&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m` +
+          `&timezone=Asia%2FKolkata`;
+        const res  = await fetch(url);
+        const data = await res.json();
+        setWeather({
+          temp:     Math.round(data.current.temperature_2m),
+          humidity: data.current.relative_humidity_2m,
+          rainfall: Math.round((data.current.precipitation || 0) * 10) / 10,
+          wind:     Math.round(data.current.wind_speed_10m || 0),
         });
       } catch {
-        setRealWeather({ temp: '--°C', humidity: '--%', rainfall: '--', forecast: 'Weather unavailable' });
+        setWeather({ temp: 28, humidity: 64, rainfall: 12, wind: 14 });
+      } finally {
+        setLoadingWx(false);
       }
     })();
   }, []);
 
-  const goTo = (nextStep) => {
-    Animated.timing(fadeAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
-      setStep(nextStep);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-    });
-  };
+  const conditions = weather ? [
+    {
+      icon: 'thermometer', label: t('ai.condTemp'),
+      value: `${weather.temp}°C`,
+      sub: weather.temp < 35 ? t('ai.condTempOptimal') : t('ai.condTempHeat'),
+      color: weather.temp >= 35 ? RED : ORANGE,
+    },
+    {
+      icon: 'water', label: t('ai.condHumidity'),
+      value: `${weather.humidity}%`,
+      sub: weather.humidity >= 70 ? t('ai.condHumidityHigh') : t('ai.condHumidityMod'),
+      color: BLUE,
+    },
+    {
+      icon: 'rainy', label: t('ai.condRainfall'),
+      value: `${weather.rainfall} mm`,
+      sub: t('ai.condRainfallSub'),
+      color: BLUE,
+    },
+    {
+      icon: 'flag', label: t('ai.condWind'),
+      value: `${weather.wind} km/h`,
+      sub: weather.wind > 25 ? t('ai.condWindWarn') : t('ai.condWindGood'),
+      color: GREEN,
+    },
+  ] : [];
 
-  const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission Required', 'Please allow photo library access.'); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.7 });
-    if (!result.canceled) setCropImage(result.assets[0].uri);
-  };
+  // AI weather insight
+  const weatherInsight = weather
+    ? weather.humidity >= 70
+      ? t('ai.weatherHighHumidity', { humidity: weather.humidity, rainfall: weather.rainfall, crop: crop.name })
+      : t('ai.weatherStable', { temp: weather.temp, crop: crop.name })
+    : null;
 
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { Alert.alert('Permission Required', 'Please allow camera access.'); return; }
-    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.7 });
-    if (!result.canceled) setCropImage(result.assets[0].uri);
-  };
-
-  const handleNext = () => {
-    // Only the truly essential fields block progression
-    if (step === 1 && !form.crop) {
-      Alert.alert('Select Crop', 'Please select your crop type.'); return;
-    }
-    if (step === 2 && !form.soilType) {
-      Alert.alert('Select Soil Type', 'Please select your soil type.'); return;
-    }
-    goTo(step + 1);
-  };
-
-  const handleAnalyze = async () => {
-    if (!form.problem) {
-      Alert.alert('Select Symptom', 'Please select at least one visible symptom.'); return;
-    }
-    goTo(4);
-    // Run the API call and the minimum animation delay in parallel.
-    // User sees at most 4 seconds on the processing screen regardless of API speed.
-    try {
-      const [result] = await Promise.all([
-        getAIRecommendation({ ...form, hasImage: !!cropImage }),
-        new Promise(resolve => setTimeout(resolve, 4000)),
-      ]);
-      setRecommendation(result);
-      goTo(5);
-    } catch {
-      setRecommendation(getMock());
-      goTo(5);
-    }
-  };
-
-  const getMock = () => ({
-    fertilizers: [
-      { name: 'DAP (Di-Ammonium Phosphate)', dose: '50 kg/acre basal', timing: 'At sowing time' },
-      { name: 'Urea (46% N)', dose: '33 kg/acre', timing: 'Split: 21 days after sowing' },
-    ],
-    pesticides: [
-      { name: 'Mancozeb 75% WP', dose: '2.5g/litre water', timing: 'Spray every 10 days' },
-    ],
-    warning: 'Rain expected soon — delay foliar spray by 2 days for best results.',
-    generalAdvice: 'Conduct soil test before next season to optimize fertilizer use.',
-  });
-
-  // ── Intro Screen ────────────────────────────────────────────────────────────
-  if (step === 0) {
-    return (
-      <View style={styles.darkContainer}>
-        <StatusBar barStyle="light-content" backgroundColor={AI.bg} />
-        <LinearGradient colors={[AI.bg, '#0A1628', '#060D1F']} style={{ flex: 1 }}>
-          {/* Grid lines — non-interactive overlay */}
-          <View style={styles.gridOverlay} pointerEvents="none">
-            {[...Array(8)].map((_, i) => (
-              <View key={i} style={[styles.gridLineH, { top: `${i * 14}%` }]} />
-            ))}
-          </View>
-
-          {/* ScrollView ensures button is always reachable on small screens */}
-          <ScrollView
-            contentContainerStyle={styles.introScreen}
-            showsVerticalScrollIndicator={false}
-            bounces={false}
-          >
-            <View style={styles.introBadge}>
-              <View style={styles.liveDot} />
-              <Text style={styles.introBadgeText}>POWERED BY GEMINI AI</Text>
-            </View>
-
-            <AIOrb size={100} />
-
-            <View style={styles.introTextBlock}>
-              <Text style={styles.introTitle}>
-                FARM<Text style={{ color: AI.neonGreen }}>AI</Text>
-              </Text>
-              <Text style={styles.introSubtitle}>Your Personal Crop Intelligence</Text>
-              <Text style={styles.introDesc}>
-                Advanced AI analyzes your crop, soil & weather to give expert fertilizer and pesticide recommendations — instantly.
-              </Text>
-            </View>
-
-            {/* Feature chips */}
-            <View style={styles.featureRow}>
-              {['🌡️ Weather Data', '🌱 Crop DNA', '📸 Image Scan'].map((f, i) => (
-                <View key={i} style={styles.featureChip}>
-                  <Text style={styles.featureChipText}>{f}</Text>
-                </View>
-              ))}
-            </View>
-
-            <TouchableOpacity style={styles.startBtn} onPress={() => goTo(1)} activeOpacity={0.85}>
-              <LinearGradient colors={[AI.neonGreen + 'EE', '#00CC66']} style={styles.startBtnGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-                <Text style={styles.startBtnText}>Start AI Analysis</Text>
-                <Ionicons name="arrow-forward" size={20} color={AI.bg} />
-              </LinearGradient>
-            </TouchableOpacity>
-            <Text style={styles.introHint}>Tap to begin • Takes only 2 minutes</Text>
-          </ScrollView>
-        </LinearGradient>
-      </View>
-    );
-  }
-
-  // ── Processing Screen ────────────────────────────────────────────────────────
-  if (step === 4) {
-    return (
-      <View style={styles.darkContainer}>
-        <StatusBar barStyle="light-content" backgroundColor={AI.bg} />
-        <LinearGradient colors={[AI.bg, '#0A1628']} style={styles.processingScreen}>
-          <AIProcessingScreen cropName={form.crop} />
-        </LinearGradient>
-      </View>
-    );
-  }
-
-  // ── Results Screen ───────────────────────────────────────────────────────────
-  if (step === 5 && recommendation) {
-    return (
-      <View style={styles.darkContainer}>
-        <StatusBar barStyle="light-content" backgroundColor={AI.bg} />
-        <ScrollView style={styles.resultsScroll} showsVerticalScrollIndicator={false}>
-          <LinearGradient colors={[AI.bg, '#0A1628']} style={styles.resultsHeader}>
-            <View style={styles.resultsAIBadge}>
-              <Text style={styles.resultsEmoji}>🤖</Text>
-              <View>
-                <TypewriterText text="Analysis Complete" style={styles.resultsBigTitle} delay={200} />
-                <TypewriterText text={`For: ${form.crop} · ${form.soilType}`} style={styles.resultsSubtitle} delay={600} />
-              </View>
-            </View>
-          </LinearGradient>
-
-          <View style={styles.resultsPadding}>
-            {/* Disease Card (shown when backend returns diagnosis) */}
-            {recommendation.disease && (
-              <ResultCard title="Disease Detected" icon="🔬" color={AI.neonOrange} delay={0}>
-                <View style={{ gap: 8 }}>
-                  <Text style={[styles.recName, { fontSize: 16, color: AI.neonOrange }]}>
-                    {recommendation.disease.name}
-                  </Text>
-                  {recommendation.disease.scientificName ? (
-                    <Text style={{ fontSize: 12, color: AI.textSub, fontStyle: 'italic' }}>
-                      {recommendation.disease.scientificName}
-                    </Text>
-                  ) : null}
-                  <View style={{ flexDirection: 'row', gap: 10, flexWrap: 'wrap' }}>
-                    <View style={[styles.recMetaChip, { backgroundColor: AI.neonOrange + '25' }]}>
-                      <Text style={[styles.recMetaText, { color: AI.neonOrange }]}>
-                        Probability: {recommendation.disease.probability}%
-                      </Text>
-                    </View>
-                    {recommendation.riskLevel && (
-                      <View style={[styles.recMetaChip, { backgroundColor: AI.neonPurple + '25' }]}>
-                        <Text style={[styles.recMetaText, { color: AI.neonPurple }]}>
-                          Risk: {recommendation.riskLevel}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                  {recommendation.disease.description ? (
-                    <Text style={{ fontSize: 13, color: AI.textSub, lineHeight: 20, marginTop: 4 }}>
-                      {recommendation.disease.description}
-                    </Text>
-                  ) : null}
-                </View>
-              </ResultCard>
-            )}
-
-            {/* Fertilizer Card */}
-            <ResultCard title="Fertilizer Plan" icon="🌿" color={AI.neonGreen} delay={300}>
-              {recommendation.fertilizers?.map((item, i) => (
-                <View key={i} style={styles.recRow}>
-                  <View style={[styles.recIndex, { backgroundColor: AI.neonGreen + '30' }]}>
-                    <Text style={[styles.recIndexText, { color: AI.neonGreen }]}>{i + 1}</Text>
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.recName}>{item.name}</Text>
-                    <View style={styles.recMetaRow}>
-                      <View style={styles.recMetaChip}>
-                        <Ionicons name="beaker-outline" size={11} color={AI.neonGreen} />
-                        <Text style={[styles.recMetaText, { color: AI.neonGreen }]}>{item.dose}</Text>
-                      </View>
-                      <View style={[styles.recMetaChip, { backgroundColor: AI.neonBlue + '20' }]}>
-                        <Ionicons name="time-outline" size={11} color={AI.neonBlue} />
-                        <Text style={[styles.recMetaText, { color: AI.neonBlue }]}>{item.timing}</Text>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-              ))}
-            </ResultCard>
-
-            {/* Pesticide Card */}
-            {recommendation.pesticides?.length > 0 && (
-              <ResultCard title="Pesticide Plan" icon="🔬" color={AI.neonPurple} delay={600}>
-                {recommendation.pesticides.map((item, i) => (
-                  <View key={i} style={styles.recRow}>
-                    <View style={[styles.recIndex, { backgroundColor: AI.neonPurple + '30' }]}>
-                      <Text style={[styles.recIndexText, { color: AI.neonPurple }]}>{i + 1}</Text>
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.recName}>{item.name}</Text>
-                      <View style={styles.recMetaRow}>
-                        <View style={[styles.recMetaChip, { backgroundColor: AI.neonPurple + '20' }]}>
-                          <Text style={[styles.recMetaText, { color: AI.neonPurple }]}>{item.dose}</Text>
-                        </View>
-                        <View style={[styles.recMetaChip, { backgroundColor: '#FF8C0020' }]}>
-                          <Text style={[styles.recMetaText, { color: AI.neonOrange }]}>{item.timing}</Text>
-                        </View>
-                      </View>
-                    </View>
-                  </View>
-                ))}
-              </ResultCard>
-            )}
-
-            {/* Warning */}
-            {recommendation.warning && (
-              <ResultCard title="AI Alert" icon="⚡" color={AI.neonOrange} delay={900}>
-                <TypewriterText text={recommendation.warning} style={styles.warningText} delay={1000} />
-              </ResultCard>
-            )}
-
-            {/* Advice */}
-            {recommendation.generalAdvice && (
-              <ResultCard title="Expert Advice" icon="💡" color={AI.neonBlue} delay={1200}>
-                <TypewriterText text={recommendation.generalAdvice} style={styles.adviceText} delay={1400} />
-              </ResultCard>
-            )}
-
-            {/* Action buttons */}
-            <TouchableOpacity style={styles.shopResultBtn} onPress={() => navigation.goBack()}>
-              <LinearGradient colors={[AI.neonGreen + 'DD', '#00CC66']} style={styles.shopResultGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-                <Ionicons name="storefront" size={20} color={AI.bg} />
-                <Text style={styles.shopResultText}>Shop Recommended Products</Text>
-              </LinearGradient>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.retryBtn} onPress={() => goTo(0)}>
-              <Ionicons name="refresh" size={18} color={AI.neonGreen} />
-              <Text style={styles.retryText}>New Analysis</Text>
-            </TouchableOpacity>
-          </View>
-        </ScrollView>
-      </View>
-    );
-  }
-
-  // ── Input Steps 1-3 ──────────────────────────────────────────────────────────
   return (
-    <View style={styles.darkContainer}>
-      <StatusBar barStyle="light-content" backgroundColor={AI.bg} />
-      <LinearGradient colors={[AI.bg, '#0A1628']} style={{ flex: 1 }}>
-        <SafeAreaView style={{ flex: 1 }}>
-          <HUDStepBar step={step} total={3} />
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={S.scrollContent}>
+      <Text style={S.stepTitle}>{t('ai.fieldConditions')}</Text>
+      <Text style={S.stepSub}>{t('ai.fieldConditionsSub')}</Text>
 
-          <ScrollView
-            style={{ flex: 1 }}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.stepContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            {/* Step 1 — Crop & Land */}
-            {step === 1 && (
-              <>
-                <View style={styles.stepTitleRow}>
-                  <Text style={styles.stepEmoji}>🌱</Text>
-                  <View>
-                    <Text style={styles.stepTitle}>Crop Information</Text>
-                    <Text style={styles.stepSub}>Select your crop and land details</Text>
-                  </View>
-                </View>
+      {/* Weather section */}
+      <View style={S.rowBetween}>
+        <Text style={S.sectionLabel}>{t('ai.liveWeather')}</Text>
+        <View style={S.liveTag}>
+          <View style={S.liveDot} />
+          <Text style={S.liveTxt}>LIVE</Text>
+        </View>
+      </View>
 
-                <Text style={styles.fieldLabel}>SELECT CROP</Text>
-                <View style={styles.chipGrid}>
-                  {CROPS.map(c => (
-                    <GlowChip key={c} label={c} selected={form.crop === c} onPress={() => update('crop', c)} />
-                  ))}
-                </View>
+      {loadingWx ? (
+        <View style={S.weatherLoading}>
+          <ActivityIndicator color={GREEN} size="small" />
+          <Text style={S.weatherLoadingTxt}>{t('ai.fetchingWeather')}</Text>
+        </View>
+      ) : (
+        <View style={S.condGrid}>
+          {conditions.map((c) => (
+            <View key={c.label} style={S.condCard}>
+              <View style={[S.condIconWrap, { backgroundColor: c.color + '15' }]}>
+                <Ionicons name={c.icon} size={24} color={c.color} />
+              </View>
+              <Text style={S.condLabel}>{c.label}</Text>
+              <Text style={[S.condValue, { color: c.color }]}>{c.value}</Text>
+              <Text style={S.condSub}>{c.sub}</Text>
+            </View>
+          ))}
+        </View>
+      )}
 
-                <Text style={styles.fieldLabel}>LAND SIZE (ACRES)</Text>
-                <View style={styles.darkInput}>
-                  <Ionicons name="resize-outline" size={18} color={AI.neonGreen} />
-                  <TextInput
-                    style={styles.darkInputField}
-                    placeholder="e.g. 2.5"
-                    placeholderTextColor={AI.textDim}
-                    keyboardType="decimal-pad"
-                    value={form.landSize}
-                    onChangeText={v => update('landSize', v)}
-                  />
-                  <Text style={styles.darkInputUnit}>acres</Text>
-                </View>
+      {/* Weather AI insight */}
+      {weatherInsight && (
+        <View style={[S.infoBox, { borderColor: BLUE + '40', backgroundColor: '#EFF6FF' }]}>
+          <View style={[S.infoBoxIcon, { backgroundColor: BLUE + '15' }]}>
+            <Ionicons name="analytics" size={18} color={BLUE} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.infoBoxTitle, { color: BLUE }]}>{t('ai.weatherInsight')}</Text>
+            <Text style={S.infoBoxTxt}>{weatherInsight}</Text>
+          </View>
+        </View>
+      )}
 
-                <Text style={styles.fieldLabel}>PREVIOUS CROP (OPTIONAL)</Text>
-                <View style={styles.darkInput}>
-                  <Ionicons name="time-outline" size={18} color={AI.neonBlue} />
-                  <TextInput
-                    style={styles.darkInputField}
-                    placeholder="e.g. Wheat"
-                    placeholderTextColor={AI.textDim}
-                    value={form.previousCrop}
-                    onChangeText={v => update('previousCrop', v)}
-                  />
-                </View>
-              </>
-            )}
-
-            {/* Step 2 — Soil & Weather */}
-            {step === 2 && (
-              <>
-                <View style={styles.stepTitleRow}>
-                  <Text style={styles.stepEmoji}>🌍</Text>
-                  <View>
-                    <Text style={styles.stepTitle}>Soil & Conditions</Text>
-                    <Text style={styles.stepSub}>Help AI understand your field</Text>
-                  </View>
-                </View>
-
-                <Text style={styles.fieldLabel}>SOIL TYPE</Text>
-                <View style={styles.chipGrid}>
-                  {SOILS.map(s => (
-                    <GlowChip key={s} label={s} selected={form.soilType === s} onPress={() => update('soilType', s)} />
-                  ))}
-                </View>
-
-                <Text style={styles.fieldLabel}>IRRIGATION SOURCE</Text>
-                <View style={styles.darkInput}>
-                  <Ionicons name="water-outline" size={18} color={AI.neonBlue} />
-                  <TextInput
-                    style={styles.darkInputField}
-                    placeholder="e.g. Borewell, Canal, Rain-fed"
-                    placeholderTextColor={AI.textDim}
-                    value={form.irrigation}
-                    onChangeText={v => update('irrigation', v)}
-                  />
-                </View>
-
-                {/* Live Weather Card */}
-                <View style={styles.weatherCard}>
-                  <LinearGradient colors={['#001830', '#002040']} style={styles.weatherCardGradient}>
-                    <View style={styles.weatherCardHeader}>
-                      <Ionicons name="wifi" size={14} color={AI.neonGreen} />
-                      <Text style={styles.weatherLive}>LIVE WEATHER DATA</Text>
-                    </View>
-                    <View style={styles.weatherGrid}>
-                      {[
-                        { icon: 'thermometer', label: 'Temp', val: realWeather.temp, color: AI.neonOrange },
-                        { icon: 'water', label: 'Humidity', val: realWeather.humidity, color: AI.neonBlue },
-                        { icon: 'rainy', label: 'Rainfall', val: realWeather.rainfall, color: AI.neonPurple },
-                      ].map((w, i) => (
-                        <View key={i} style={styles.weatherStat}>
-                          <Ionicons name={w.icon} size={22} color={w.color} />
-                          <Text style={[styles.weatherVal, { color: w.color }]}>{w.val}</Text>
-                          <Text style={styles.weatherLabel}>{w.label}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <View style={styles.forecastRow}>
-                      <Ionicons name="rainy" size={14} color={AI.neonBlue} />
-                      <Text style={styles.forecastText}>{realWeather.forecast}</Text>
-                    </View>
-                  </LinearGradient>
-                </View>
-              </>
-            )}
-
-            {/* Step 3 — Problem & Photo */}
-            {step === 3 && (
-              <>
-                <View style={styles.stepTitleRow}>
-                  <Text style={styles.stepEmoji}>🔬</Text>
-                  <View>
-                    <Text style={styles.stepTitle}>Problem Detection</Text>
-                    <Text style={styles.stepSub}>Describe symptoms for AI diagnosis</Text>
-                  </View>
-                </View>
-
-                <Text style={styles.fieldLabel}>VISIBLE SYMPTOMS</Text>
-                <View style={styles.chipGrid}>
-                  {PROBLEMS.map(p => (
-                    <GlowChip key={p} label={p} selected={form.problem === p} onPress={() => update('problem', p)} />
-                  ))}
-                </View>
-
-                <Text style={styles.fieldLabel}>DESCRIBE IN DETAIL</Text>
-                <View style={[styles.darkInput, { height: 100, alignItems: 'flex-start', paddingTop: 12 }]}>
-                  <TextInput
-                    style={[styles.darkInputField, { height: 80, textAlignVertical: 'top' }]}
-                    placeholder="e.g. Leaves turning yellow from base, white deposits visible..."
-                    placeholderTextColor={AI.textDim}
-                    multiline
-                    value={form.symptoms}
-                    onChangeText={v => update('symptoms', v)}
-                  />
-                </View>
-
-                {/* Photo Upload */}
-                <Text style={styles.fieldLabel}>UPLOAD CROP PHOTO <Text style={{ color: AI.neonGreen }}>(BOOSTS ACCURACY 40%)</Text></Text>
-                <View style={styles.photoRow}>
-                  <TouchableOpacity style={styles.photoBtn} onPress={takePhoto}>
-                    <LinearGradient colors={[AI.neonGreen + '20', AI.neonGreen + '08']} style={styles.photoBtnGradient}>
-                      <Ionicons name="camera" size={28} color={AI.neonGreen} />
-                      <Text style={styles.photoBtnText}>Camera</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.photoBtn} onPress={pickImage}>
-                    <LinearGradient colors={[AI.neonBlue + '20', AI.neonBlue + '08']} style={styles.photoBtnGradient}>
-                      <Ionicons name="images" size={28} color={AI.neonBlue} />
-                      <Text style={[styles.photoBtnText, { color: AI.neonBlue }]}>Gallery</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-
-                {cropImage && (
-                  <View style={styles.photoConfirm}>
-                    <Ionicons name="checkmark-circle" size={18} color={AI.neonGreen} />
-                    <Text style={styles.photoConfirmText}>Crop photo ready for AI scan</Text>
-                    <TouchableOpacity onPress={() => setCropImage(null)}>
-                      <Ionicons name="close-circle" size={18} color={AI.textSub} />
-                    </TouchableOpacity>
+      {/* Soil type */}
+      <Text style={[S.sectionLabel, { marginTop: 24 }]}>{t('ai.yourSoilType')}</Text>
+      <Text style={S.stepSub}>{t('ai.soilTypeSub')}</Text>
+      {soilsLoading ? (
+        <ActivityIndicator color={GREEN} style={{ marginVertical: 16 }} />
+      ) : (
+        <View style={S.soilGrid}>
+          {soils.map((soil) => {
+            const sel = soilType?.id === soil.id;
+            return (
+              <TouchableOpacity
+                key={soil.id}
+                style={[S.soilCard, sel && { borderColor: GREEN, borderWidth: 2.5 }]}
+                onPress={() => setSoilType(soil)}
+                activeOpacity={0.85}
+              >
+                <Image source={{ uri: soil.image }} style={S.soilImg} resizeMode="cover" />
+                {sel && (
+                  <View style={S.soilCheck}>
+                    <Ionicons name="checkmark-circle" size={20} color={GREEN} />
                   </View>
                 )}
-              </>
-            )}
-          </ScrollView>
+                <View style={S.soilFooter}>
+                  <Text style={[S.soilName, sel && { color: GREEN, fontWeight: '800' }]}>{soil.name}</Text>
+                  <Text style={S.soilDesc}>{soil.desc}</Text>
+                  <Text style={S.soilCrops}>{t('ai.soilBestFor')} {(soil.crops || []).slice(0, 2).join(', ')}</Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
 
-          {/* Navigation buttons */}
-          <View style={styles.navBar}>
-            <TouchableOpacity style={styles.backBtn} onPress={() => goTo(step - 1)}>
-              <Ionicons name="arrow-back" size={20} color={AI.neonGreen} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.nextBtn}
-              onPress={step < 3 ? handleNext : handleAnalyze}
-              activeOpacity={0.85}
-            >
-              <LinearGradient colors={[AI.neonGreen + 'EE', '#00CC66']} style={styles.nextBtnGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-                <Text style={styles.nextBtnText}>{step < 3 ? 'Continue' : '  Analyze with AI  '}</Text>
-                <Ionicons name={step < 3 ? 'arrow-forward' : 'bulb'} size={20} color={AI.bg} />
-              </LinearGradient>
-            </TouchableOpacity>
+      {soilType && (
+        <View style={[S.infoBox, { borderColor: GREEN + '40', backgroundColor: '#E8F5E9' }]}>
+          <View style={[S.infoBoxIcon, { backgroundColor: GREEN + '20' }]}>
+            <Ionicons name="earth" size={18} color={GREEN} />
           </View>
-        </SafeAreaView>
-      </LinearGradient>
+          <View style={{ flex: 1 }}>
+            <Text style={[S.infoBoxTitle, { color: GREEN }]}>{t('ai.soilMatched')}</Text>
+            <Text style={S.infoBoxTxt}>{t('ai.soilMatchedDesc', { name: soilType.name })}</Text>
+          </View>
+        </View>
+      )}
+
+      <TouchableOpacity
+        style={[S.primaryBtn, !soilType && S.btnDisabled]}
+        disabled={!soilType}
+        onPress={() => onNext(soilType, weather)}
+        activeOpacity={0.85}
+      >
+        <Ionicons name="sparkles" size={18} color="#fff" style={{ marginRight: 8 }} />
+        <Text style={S.primaryBtnTxt}>
+          {photos.length > 0 ? t('ai.analyzeBtnPhotos', { count: photos.length }) : t('ai.analyzeBtnField')}
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={S.backBtn} onPress={onBack}>
+        <Ionicons name="arrow-back" size={15} color="#888" />
+        <Text style={S.backBtnTxt}>{t('ai.backToPhotos')}</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STEP 4 — AI Analysis Results
+// ─────────────────────────────────────────────────────────────────────────────
+function Step4({ crop, soil, landSize, prevCrop, weather, photos, detections, onBack }) {
+  const soilPh      = soil?.ph ?? 7.0;
+  const soilCarbon  = soil?.carbon ?? 'Medium';
+  const soilHealth  = soil?.health ?? 'Moderate';
+  const soilColor   = soil?.healthColor ?? ORANGE;
+  const phPercent   = ((soilPh - 5) / 4) * 100;
+
+  // Entrance animations — 7 sections slide up + fade in
+  const anims = useRef(Array.from({ length: 7 }, () => ({
+    op: new Animated.Value(0),
+    ty: new Animated.Value(24),
+  }))).current;
+
+  useEffect(() => {
+    anims.forEach((a, i) => {
+      Animated.parallel([
+        Animated.timing(a.op, { toValue: 1, duration: 380, delay: i * 90, useNativeDriver: true }),
+        Animated.timing(a.ty, { toValue: 0, duration: 380, delay: i * 90, useNativeDriver: true }),
+      ]).start();
+    });
+  }, []);
+
+  const aS = (i) => ({ opacity: anims[i].op, transform: [{ translateY: anims[i].ty }] });
+
+  // Overall severity = worst across all detections + crop diseases
+  const overallCritical = (detections || []).some(d => d.severity === 'critical') ||
+    (crop.diseases || []).some(d => d.severity === 'critical');
+
+  const { t } = useLanguage();
+  const scanSummaryColor = overallCritical ? RED : ORANGE;
+  const scanSummaryBg    = overallCritical ? '#FFEBEE' : '#FFF3E0';
+  const scanSummaryLabel = overallCritical ? t('ai.actionRequired') : t('ai.monitorClosely');
+  const safeDetections   = detections || [];
+  const safeDiseases     = crop.diseases || [];
+  const safeFertilizer   = crop.fertilizer || [];
+  const safePesticide    = crop.pesticide || {};
+
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[S.scrollContent, { paddingBottom: 60 }]}>
+
+      {/* ── Analysis Complete Header ── */}
+      <Animated.View style={aS(0)}>
+      <View style={S.resultsHeader}>
+        <View style={S.resultsHeaderGrad}>
+          <View style={S.verifiedBadge}>
+            <Ionicons name="shield-checkmark" size={12} color="#fff" />
+            <Text style={S.verifiedTxt}>{t('ai.verifiedAI')}</Text>
+          </View>
+          <Text style={S.resultsTitle}>{t('ai.analysisComplete')}</Text>
+          <Text style={S.resultsSub}>
+            {t('ai.resultsSub', { crop: crop.name, count: photos.length })}
+          </Text>
+          <View style={S.resultsStats}>
+            <View style={S.resultsStat}>
+              <Text style={S.resultsStatVal}>{safeDiseases.length}</Text>
+              <Text style={S.resultsStatLbl}>{t('ai.diseasesChecked')}</Text>
+            </View>
+            <View style={S.resultsStatDiv} />
+            <View style={S.resultsStat}>
+              <Text style={S.resultsStatVal}>{photos.length || '—'}</Text>
+              <Text style={S.resultsStatLbl}>{t('ai.photosAnalyzed')}</Text>
+            </View>
+            <View style={S.resultsStatDiv} />
+            <View style={S.resultsStat}>
+              <Text style={S.resultsStatVal}>{landSize || '—'}</Text>
+              <Text style={S.resultsStatLbl}>{t('ai.acresCovered')}</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+      </Animated.View>
+
+      {/* ── Download Report ── */}
+      <Animated.View style={aS(1)}>
+      <TouchableOpacity style={S.downloadBtn} activeOpacity={0.85}>
+        <Ionicons name="document-text-outline" size={16} color={BLUE} />
+        <Text style={S.downloadBtnTxt}>{t('ai.downloadReport')}</Text>
+        <Ionicons name="download-outline" size={16} color={BLUE} />
+      </TouchableOpacity>
+      </Animated.View>
+
+      {/* ── Photo Scan Results ── */}
+      <Animated.View style={aS(2)}>
+      {photos.length > 0 && (
+        <View style={S.card}>
+          <View style={S.cardTitleRow}>
+            <Text style={S.cardTitle}>{t('ai.photoScanResults')}</Text>
+            <View style={[S.scanResultBadge, { backgroundColor: scanSummaryBg }]}>
+              <Text style={[S.scanResultBadgeTxt, { color: scanSummaryColor }]}>{scanSummaryLabel}</Text>
+            </View>
+          </View>
+          <Text style={S.cardSubtitle}>{t('ai.photoMatched', { crop: crop.name })}</Text>
+          {safeDetections.map((det, idx) => (
+            <View key={det.id || idx} style={S.photoResultRow}>
+              {/* Thumbnail */}
+              <View style={S.photoResultThumbWrap}>
+                <Image source={{ uri: det.uri }} style={S.photoResultThumb} resizeMode="cover" />
+                <View style={S.photoResultScanTag}>
+                  <Text style={S.photoResultScanTxt}>
+                    {t(SCAN_TYPES.find(s => s.id === det.type)?.labelKey || 'ai.scanLeaf')}
+                  </Text>
+                </View>
+              </View>
+              {/* Detection info */}
+              <View style={S.photoResultInfo}>
+                <Text style={S.photoResultIdx}>{t('ai.photoLabel', { num: idx + 1 })}</Text>
+                <Text style={S.photoResultDisease}>{det.disease}</Text>
+                <View style={[S.severityPill, { backgroundColor: sevBg(det.severity) }]}>
+                  <Text style={[S.severityPillTxt, { color: sevColor(det.severity) }]}>
+                    {t('ai.' + sevLabelKey(det.severity))}
+                  </Text>
+                </View>
+                {/* Confidence bar */}
+                <View style={S.confRow}>
+                  <Text style={S.confLabel}>{t('ai.confidence')}</Text>
+                  <View style={S.confBarWrap}>
+                    <View style={[S.confBarFill, { width: `${det.confidence}%`, backgroundColor: sevColor(det.severity) }]} />
+                  </View>
+                  <Text style={[S.confPct, { color: sevColor(det.severity) }]}>{det.confidence}%</Text>
+                </View>
+                <Text style={S.photoResultDesc} numberOfLines={2}>{det.desc}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+      </Animated.View>
+
+      {/* ── Diagnosis Overview ── */}
+      <Animated.View style={aS(3)}>
+      <View style={S.card}>
+        <Text style={S.cardTitle}>{t('ai.fieldDiagnosis')}</Text>
+        <View style={S.diagHeaderRow}>
+          <Image source={{ uri: crop.image }} style={S.diagCropImg} resizeMode="cover" />
+          <View style={S.diagHeaderInfo}>
+            <Text style={S.diagCropName}>{crop.name}</Text>
+            <Text style={S.diagSeason}>{crop.season}</Text>
+            {prevCrop && (
+              <Text style={S.diagPrevCrop}>{t('ai.prevCropLabel', { crop: prevCrop })}</Text>
+            )}
+            <View style={[S.severityBadge, { backgroundColor: scanSummaryBg, marginTop: 8 }]}>
+              <Ionicons name={overallCritical ? 'warning' : 'alert-circle'} size={12} color={scanSummaryColor} />
+              <Text style={[S.severityBadgeTxt, { color: scanSummaryColor }]}>{scanSummaryLabel}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={S.diagDivider} />
+
+        <Text style={[S.sectionLabel, { marginBottom: 10 }]}>{t('ai.activeRiskSummary')}</Text>
+        {safeDiseases.slice(0, 2).map((d) => (
+          <View key={d.name} style={S.diagItem}>
+            <View style={[S.diagDot, { backgroundColor: sevColor(d.severity) }]} />
+            <Text style={S.diagItemName}>{d.name}</Text>
+            <View style={[S.severityPill, { backgroundColor: sevBg(d.severity) }]}>
+              <Text style={[S.severityPillTxt, { color: sevColor(d.severity) }]}>{sevLabel(d.severity)}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+      </Animated.View>
+
+      {/* ── Disease Symptoms Catalog ── */}
+      <Animated.View style={aS(4)}>
+      <Text style={S.sectionLabel}>{t('ai.diseaseSymptoms', { crop: crop.name })}</Text>
+      <Text style={[S.stepSub, { marginBottom: 12 }]}>{t('ai.diseaseSymptomsSubd')}</Text>
+      {safeDiseases.map((d) => (
+        <View key={d.name} style={[S.diseaseCard, { borderLeftColor: sevColor(d.severity) }]}>
+          <View style={S.diseaseCardHeader}>
+            <View style={[S.diseaseIconBg, { backgroundColor: sevBg(d.severity) }]}>
+              <Ionicons name={d.icon || 'warning'} size={18} color={sevColor(d.severity)} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={S.diseaseName}>{d.name}</Text>
+              <View style={[S.severityPill, { backgroundColor: sevBg(d.severity), alignSelf: 'flex-start' }]}>
+                <Text style={[S.severityPillTxt, { color: sevColor(d.severity) }]}>{sevLabel(d.severity)}</Text>
+              </View>
+            </View>
+            {/* If detected in photos, show camera icon */}
+            {safeDetections.some(det => det.disease === d.name) && (
+              <View style={S.cameraDetectedBadge}>
+                <Ionicons name="camera" size={12} color={BLUE} />
+                <Text style={S.cameraDetectedTxt}>{t('ai.detected')}</Text>
+              </View>
+            )}
+          </View>
+          <Text style={S.diseaseDesc}>{d.desc}</Text>
+        </View>
+      ))}
+      </Animated.View>
+
+      {/* ── Soil Health ── */}
+      <Animated.View style={aS(5)}>
+      <View style={[S.card, { borderLeftWidth: 4, borderLeftColor: soilColor }]}>
+        <View style={S.cardTitleRow}>
+          <Text style={S.cardTitle}>{t('ai.soilHealth')}</Text>
+          <Text style={[S.soilHealthScore, { color: soilColor }]}>{soilHealth}</Text>
+        </View>
+        <Text style={S.cardSubtitle}>{soil?.name} · {soil?.desc}</Text>
+
+        <View style={S.phRow}>
+          <Text style={S.phLabel}>{t('ai.phLevel')}</Text>
+          <View style={S.phBarWrap}>
+            <View style={[S.phBarFill, { width: `${phPercent}%`, backgroundColor: soilColor }]} />
+          </View>
+          <Text style={[S.phValue, { color: soilColor }]}>{soilPh}</Text>
+        </View>
+        <View style={S.phRow}>
+          <Text style={S.phLabel}>{t('ai.carbonIndex')}</Text>
+          <View style={S.phBarWrap}>
+            <View style={[S.phBarFill, {
+              width: soilCarbon === 'High' ? '85%' : soilCarbon === 'Medium' ? '55%' : '30%',
+              backgroundColor: soilColor,
+            }]} />
+          </View>
+          <Text style={[S.phValue, { color: soilColor }]}>{soilCarbon}</Text>
+        </View>
+
+        <Text style={S.soilNote}>
+          {soilHealth === 'Excellent'
+            ? t('ai.soilHealthExcellent')
+            : soilHealth === 'Moderate'
+            ? t('ai.soilHealthModerate')
+            : t('ai.soilHealthPoor')}
+        </Text>
+
+        {weather && (
+          <View style={S.soilWeatherNote}>
+            <Ionicons name="partly-sunny" size={14} color={ORANGE} />
+            <Text style={S.soilWeatherNoteTxt}>
+              {t('ai.soilHumidityNote', { humidity: weather.humidity, condition: soilHealth === 'Poor' ? t('ai.soilDrainPoor') : t('ai.soilDrainGood') })}
+            </Text>
+          </View>
+        )}
+      </View>
+      </Animated.View>
+
+      {/* ── Fertilizer Action Plan ── */}
+      <Animated.View style={aS(6)}>
+      <View style={S.card}>
+        <Text style={S.cardTitle}>{t('ai.fertPlan')}</Text>
+        <Text style={S.cardSubtitle}>{t('ai.fertPlanSub', { field: landSize ? t('ai.fertField', { landSize }) : t('ai.fertYourField'), crop: crop.name })}</Text>
+        {safeFertilizer.map((f, i) => (
+          <View key={f.name} style={[S.fertRow, i < safeFertilizer.length - 1 && S.fertRowBorder]}>
+            <View style={[S.fertIconWrap, { backgroundColor: statColor(f.status) + '18' }]}>
+              <Ionicons
+                name={f.status === 'critical' ? 'alert-circle' : f.status === 'scheduled' ? 'calendar' : 'time'}
+                size={20}
+                color={statColor(f.status)}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={S.fertTopRow}>
+                <Text style={S.fertName}>{f.name}</Text>
+                <View style={[S.fertBadge, { backgroundColor: statColor(f.status) + '18' }]}>
+                  <Text style={[S.fertBadgeTxt, { color: statColor(f.status) }]}>{t('ai.' + statLabelKey(f.status))}</Text>
+                </View>
+              </View>
+              <Text style={S.fertDose}>{f.dose}</Text>
+              <Text style={S.fertTiming}>{f.timing}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+
+      {/* ── Pesticide Recommendation ── */}
+      {safePesticide.name && (
+      <View style={S.card}>
+        <View style={S.cardTitleRow}>
+          <Text style={S.cardTitle}>{t('ai.pesticideRec')}</Text>
+          <View style={S.topRatedBadge}><Text style={S.topRatedTxt}>{t('ai.topRated')}</Text></View>
+        </View>
+
+        <View style={S.pestHeader}>
+          <View style={S.pestIconWrap}>
+            <Ionicons name="flask" size={28} color={GREEN} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={S.pestName}>{safePesticide.name}</Text>
+            <Text style={S.pestTagline}>{t('ai.pesticideTagline', { crop: crop.name })}</Text>
+          </View>
+        </View>
+
+        <View style={S.pestStatsRow}>
+          <View style={S.pestStatCell}>
+            <Text style={S.pestStatLabel}>{t('ai.dosage')}</Text>
+            <Text style={S.pestStatValue}>{safePesticide.dose}</Text>
+          </View>
+          <View style={S.pestStatDiv} />
+          <View style={S.pestStatCell}>
+            <Text style={S.pestStatLabel}>{t('ai.frequency')}</Text>
+            <Text style={S.pestStatValue}>{safePesticide.freq}</Text>
+          </View>
+        </View>
+
+        <View style={S.safetyBox}>
+          <Ionicons name="warning" size={14} color={ORANGE} />
+          <View style={{ flex: 1 }}>
+            <Text style={[S.safetyTitle, { color: ORANGE }]}>{t('ai.safetyNote')}</Text>
+            <Text style={S.safetyDesc}>{safePesticide.safety}</Text>
+          </View>
+        </View>
+
+        {weather && weather.wind > 25 && (
+          <View style={[S.safetyBox, { backgroundColor: '#FFEBEE', borderColor: RED + '40' }]}>
+            <Ionicons name="warning" size={14} color={RED} />
+            <Text style={[S.safetyDesc, { flex: 1, color: RED }]}>
+              {t('ai.windWarn', { wind: weather.wind })}
+            </Text>
+          </View>
+        )}
+
+        <TouchableOpacity style={S.mixingBtn}>
+          <Ionicons name="document-text-outline" size={16} color={BLUE} />
+          <Text style={S.mixingBtnTxt}>{t('ai.mixingInstructions')}</Text>
+        </TouchableOpacity>
+      </View>
+      )}
+      </Animated.View>
+
+      {/* ── Start New Analysis ── */}
+      <TouchableOpacity style={S.backBtn} onPress={onBack}>
+        <Ionicons name="refresh" size={15} color="#888" />
+        <Text style={S.backBtnTxt}>{t('ai.startNewAnalysis')}</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Main Screen
+// ─────────────────────────────────────────────────────────────────────────────
+export default function AIRecommendation({ navigation }) {
+  const { t } = useLanguage();
+  const [step,       setStep]       = useState(1);
+  const [crop,       setCrop]       = useState(null);
+  const [landSize,   setLandSize]   = useState('');
+  const [prevCrop,   setPrevCrop]   = useState('');
+  const [photos,     setPhotos]     = useState([]);
+  const [soil,       setSoil]       = useState(null);
+  const [weather,    setWeather]    = useState(null);
+  const [analyzing,  setAnalyzing]  = useState(false);
+  const [detections, setDetections] = useState([]);
+
+  const goBack = () => {
+    if (step === 1) navigation.goBack();
+    else setStep(s => s - 1);
+  };
+
+  const proceedToResults = async (soilType, wx) => {
+    setSoil(soilType);
+    setWeather(wx);
+    setAnalyzing(true);
+    try {
+      const formData = new FormData();
+      formData.append('cropId', crop.id);
+      formData.append('soilId', soilType.id);
+      formData.append('landSize', landSize);
+      formData.append('weather', JSON.stringify(wx));
+      photos.forEach((photo, i) => {
+        formData.append('photos', { uri: photo.uri, type: 'image/jpeg', name: `photo_${i}.jpg` });
+        formData.append(`photoTypes[${i}]`, photo.type);
+      });
+      const { data } = await api.post('/agristore/analyze', formData);
+      setDetections(data.data?.detections || []);
+    } catch {
+      setDetections([]);
+    } finally {
+      setAnalyzing(false);
+      setStep(4);
+    }
+  };
+
+  const resetAll = () => {
+    setCrop(null); setLandSize(''); setPrevCrop('');
+    setPhotos([]); setSoil(null); setWeather(null);
+    setDetections([]); setStep(1);
+  };
+
+  return (
+    <View style={S.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+
+      {/* Header */}
+      <View style={S.header}>
+        <TouchableOpacity style={S.headerBack} onPress={goBack} activeOpacity={0.7}>
+          <Ionicons name="arrow-back" size={20} color="#1A1A1A" />
+        </TouchableOpacity>
+        <View style={S.headerCenter}>
+          <Text style={S.headerTitle}>AI Crop Advisor</Text>
+          {crop && <Text style={S.headerSub}>{crop.name} · {step < 4 ? `Step ${step} of 4` : 'Results'}</Text>}
+        </View>
+        <View style={[S.headerAvatar, { backgroundColor: GREEN }]}>
+          <Ionicons name="leaf" size={16} color="#fff" />
+        </View>
+      </View>
+
+      {/* Step indicator */}
+      <StepIndicator current={step} />
+
+      {/* Content */}
+      <View style={S.body}>
+        {step === 1 && (
+          <Step1
+            onNext={(c, land, prev) => {
+              setCrop(c); setLandSize(land); setPrevCrop(prev);
+              setStep(2);
+            }}
+          />
+        )}
+        {step === 2 && (
+          <Step2
+            crop={crop}
+            onNext={(capturedPhotos) => { setPhotos(capturedPhotos); setStep(3); }}
+            onBack={() => setStep(1)}
+          />
+        )}
+        {step === 3 && (
+          <Step3
+            crop={crop}
+            photos={photos}
+            onNext={proceedToResults}
+            onBack={() => setStep(2)}
+          />
+        )}
+        {step === 4 && !analyzing && (
+          <Step4
+            crop={crop}
+            soil={soil}
+            landSize={landSize}
+            prevCrop={prevCrop}
+            weather={weather}
+            photos={photos}
+            detections={detections}
+            onBack={resetAll}
+          />
+        )}
+      </View>
+
+      {/* AI Analyzing overlay */}
+      <AnalyzingOverlay visible={analyzing} photos={photos} />
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  darkContainer: { flex: 1, backgroundColor: AI.bg },
+// ─────────────────────────────────────────────────────────────────────────────
+// Styles
+// ─────────────────────────────────────────────────────────────────────────────
+const S = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#F8F9FA' },
+  body: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingTop: 20, paddingBottom: 40 },
 
-  // ── Intro ──────────────────────────────────────────────────────────────────
-  introScreen: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-  gridOverlay: { position: 'absolute', width: '100%', height: '100%' },
-  gridLineH: { position: 'absolute', width: '100%', height: 1, backgroundColor: AI.neonGreen + '08' },
+  // Header
+  header: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff',
+    paddingTop: Platform.OS === 'ios' ? 52 : 36,
+    paddingBottom: 14, paddingHorizontal: 16,
+    borderBottomWidth: 1, borderBottomColor: '#EEEEEE',
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 2,
+  },
+  headerBack:   { width: 36, height: 36, borderRadius: 18, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center' },
+  headerCenter: { flex: 1, alignItems: 'center' },
+  headerTitle:  { fontSize: 16, fontWeight: '800', color: '#1A1A1A' },
+  headerSub:    { fontSize: 11, color: '#888', marginTop: 1 },
+  headerAvatar: { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
 
-  introBadge: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: AI.neonGreen + '15', borderWidth: 1, borderColor: AI.neonGreen + '40', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 7, marginBottom: 20 },
-  introBadgeText: { fontSize: 11, fontWeight: '800', color: AI.neonGreen, letterSpacing: 1.5 },
+  // Step indicator
+  stepWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', paddingHorizontal: 20,
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EEEEEE',
+  },
+  stepItem:   { alignItems: 'center', gap: 4 },
+  stepDot:    { width: 26, height: 26, borderRadius: 13, backgroundColor: '#E0E0E0', justifyContent: 'center', alignItems: 'center' },
+  stepDotActive: { backgroundColor: BLUE },
+  stepDotDone:   { backgroundColor: GREEN },
+  stepNum:    { fontSize: 11, fontWeight: '800', color: '#AAA' },
+  stepNumActive: { color: '#fff' },
+  stepLabel:  { fontSize: 9, fontWeight: '600', color: '#AAA', letterSpacing: 0.3 },
+  stepLabelActive: { color: BLUE, fontWeight: '800' },
+  stepLine:   { flex: 1, height: 2, backgroundColor: '#E0E0E0', marginHorizontal: 4 },
+  stepLineActive: { backgroundColor: GREEN },
 
-  introTextBlock: { alignItems: 'center', marginTop: 10, marginBottom: 24 },
-  introTitle: { fontSize: 46, fontWeight: '900', color: AI.text, letterSpacing: 4 },
-  introSubtitle: { fontSize: 16, color: AI.textSub, marginTop: 6, letterSpacing: 1 },
-  introDesc: { fontSize: 14, color: AI.textSub, textAlign: 'center', marginTop: 14, lineHeight: 22, paddingHorizontal: 10 },
+  // Analyzing overlay
+  overlayRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 999,
+  },
+  overlayGradient: {
+    flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 36,
+    backgroundColor: '#0A1628',
+  },
+  overlayTitle:    { fontSize: 26, fontWeight: '900', color: '#fff', marginBottom: 8 },
+  overlaySub:      { fontSize: 13, color: '#aaa', marginBottom: 28, textAlign: 'center' },
+  progressBarWrap: { width: '100%', height: 6, backgroundColor: '#1A2A1A', borderRadius: 3, overflow: 'hidden', marginBottom: 24 },
+  progressBarFill: { height: '100%', backgroundColor: GREEN, borderRadius: 3 },
+  overlayStepRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  overlayStepTxt:  { fontSize: 12, color: '#888' },
 
-  featureRow: { flexDirection: 'row', gap: 10, marginBottom: 32, flexWrap: 'wrap', justifyContent: 'center' },
-  featureChip: { borderWidth: 1, borderColor: AI.neonGreen + '40', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, backgroundColor: AI.neonGreen + '10' },
-  featureChipText: { fontSize: 12, color: AI.neonGreen, fontWeight: '600' },
+  // Common
+  rowBetween:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  stepTitle:     { fontSize: 22, fontWeight: '900', color: '#1A1A1A', marginBottom: 8 },
+  stepSub:       { fontSize: 13, color: '#666', lineHeight: 20, marginBottom: 18 },
+  sectionLabel:  { fontSize: 15, fontWeight: '800', color: '#1A1A1A', marginBottom: 12 },
 
-  startBtn: { width: '100%', borderRadius: 16, overflow: 'hidden' },
-  startBtnGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 12, paddingVertical: 18 },
-  startBtnText: { fontSize: 18, fontWeight: '800', color: AI.bg },
-  introHint: { fontSize: 12, color: AI.textDim, marginTop: 14, letterSpacing: 0.5 },
+  aiBadge:    { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EFF6FF', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  aiBadgeTxt: { fontSize: 10, fontWeight: '800', color: BLUE },
 
-  // ── HUD Bar ────────────────────────────────────────────────────────────────
-  hudBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: AI.neonGreen + '20' },
-  hudLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  hudSignal: { flexDirection: 'row', alignItems: 'flex-end', gap: 2 },
-  hudSignalBar: { width: 4, borderRadius: 2 },
-  hudLabel: { fontSize: 18, fontWeight: '900', color: AI.text, letterSpacing: 2 },
-  hudSteps: { flexDirection: 'row', alignItems: 'center' },
-  hudStepDot: { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center' },
-  hudStepNum: { fontSize: 12, fontWeight: '800' },
-  hudStepLine: { width: 24, height: 2, marginHorizontal: 2 },
-  hudVersion: { fontSize: 11, color: AI.textDim, letterSpacing: 1 },
+  // Crop grid
+  cropGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  cropCard: {
+    width: (SCREEN_W - 32 - 10) / 2 - 2, // 2 cols with gap
+    backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden',
+    borderWidth: 2, borderColor: '#E8E8E8',
+    shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, elevation: 3,
+  },
+  cropImg:        { width: '100%', height: 100 },
+  cropCheckBadge: { position: 'absolute', top: 8, right: 8, backgroundColor: '#fff', borderRadius: 11 },
+  cropFooter:     { paddingHorizontal: 10, paddingVertical: 10 },
+  cropName:       { fontSize: 14, fontWeight: '700', color: '#1A1A1A', marginBottom: 2 },
+  cropSeason:     { fontSize: 10, color: '#999', fontWeight: '500' },
+  otherCropCard:  { justifyContent: 'center', alignItems: 'center', minHeight: 140, borderStyle: 'dashed', borderColor: '#CCC' },
+  otherCropIconWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F5F5F5', justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+  otherCropTxt:   { fontSize: 13, color: '#AAA', fontWeight: '600' },
 
-  // ── Step inputs ────────────────────────────────────────────────────────────
-  stepContent: { padding: 20, paddingBottom: 30 },
-  stepTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 28 },
-  stepEmoji: { fontSize: 40 },
-  stepTitle: { fontSize: 22, fontWeight: '900', color: AI.text },
-  stepSub: { fontSize: 13, color: AI.textSub, marginTop: 3 },
+  selectedPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#E8F5E9', borderRadius: 20, paddingVertical: 8, paddingHorizontal: 14, marginBottom: 4 },
+  selectedPillDot: { width: 8, height: 8, borderRadius: 4 },
+  selectedPillTxt: { fontSize: 12, color: '#2D9162', fontWeight: '600', flex: 1 },
 
-  fieldLabel: { fontSize: 11, fontWeight: '800', color: AI.textSub, letterSpacing: 1.5, marginBottom: 12, marginTop: 20 },
+  // Inputs
+  inputRow: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', borderRadius: 12, borderWidth: 1.5, borderColor: '#E0E0E0',
+    paddingHorizontal: 14, paddingVertical: 13,
+  },
+  textInput: { flex: 1, fontSize: 15, color: '#1A1A1A' },
+  inputUnit: { fontSize: 13, color: '#888', fontWeight: '700' },
 
-  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  glowChip: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 9, paddingHorizontal: 16, borderRadius: 22, borderWidth: 1.5, borderColor: AI.neonGreen + '30', backgroundColor: AI.neonGreen + '08' },
-  glowChipActive: { borderColor: AI.neonGreen, backgroundColor: AI.neonGreen + '22', shadowColor: AI.neonGreen, shadowOpacity: 0.5, shadowRadius: 8, elevation: 5 },
-  glowChipDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: AI.neonGreen },
-  glowChipText: { fontSize: 14, fontWeight: '600', color: AI.textSub },
-  glowChipTextActive: { color: AI.neonGreen, fontWeight: '700' },
+  // Dropdown
+  dropdown: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 12, borderWidth: 1.5, borderColor: '#E0E0E0', paddingHorizontal: 14, paddingVertical: 14 },
+  dropdownTxt: { flex: 1, fontSize: 14, color: '#1A1A1A', fontWeight: '600' },
+  dropdownMenu: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: '#E8E8E8', marginTop: 4, overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, elevation: 4 },
+  dropdownItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  dropdownItemTxt: { fontSize: 14, color: '#333' },
 
-  darkInput: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: AI.bgCardLight, borderWidth: 1.5, borderColor: AI.neonGreen + '30', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 14 },
-  darkInputField: { flex: 1, fontSize: 15, color: AI.text, padding: 0 },
-  darkInputUnit: { fontSize: 13, color: AI.textDim },
+  // Info box
+  infoBox: { flexDirection: 'row', gap: 12, backgroundColor: '#FFF8F0', borderRadius: 14, padding: 14, marginTop: 16, borderWidth: 1, borderColor: '#F5A62350' },
+  infoBoxIcon:  { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  infoBoxTitle: { fontSize: 10, fontWeight: '900', letterSpacing: 1, marginBottom: 4 },
+  infoBoxTxt:   { fontSize: 12, color: '#555', lineHeight: 18 },
 
-  weatherCard: { marginTop: 20, borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: AI.neonBlue + '30' },
-  weatherCardGradient: { padding: 16 },
-  weatherCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
-  weatherLive: { fontSize: 11, fontWeight: '800', color: AI.neonGreen, letterSpacing: 1.5 },
-  weatherGrid: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
-  weatherStat: { alignItems: 'center', gap: 5 },
-  weatherVal: { fontSize: 18, fontWeight: '900' },
-  weatherLabel: { fontSize: 11, color: AI.textDim },
-  forecastRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: AI.neonBlue + '15', borderRadius: 10, padding: 10 },
-  forecastText: { fontSize: 13, color: AI.neonBlue, fontWeight: '600' },
+  // Tips banner
+  tipsBanner: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#FFF8F0', borderRadius: 10, padding: 12, marginBottom: 20, borderWidth: 1, borderColor: ORANGE + '30' },
+  tipsBannerTxt: { flex: 1, fontSize: 12, color: '#555', lineHeight: 17 },
 
-  photoRow: { flexDirection: 'row', gap: 14, marginTop: 4 },
-  photoBtn: { flex: 1, borderRadius: 14, overflow: 'hidden', borderWidth: 1.5, borderColor: AI.neonGreen + '40' },
-  photoBtnGradient: { paddingVertical: 22, alignItems: 'center', gap: 8 },
-  photoBtnText: { fontSize: 14, fontWeight: '700', color: AI.neonGreen },
-  photoConfirm: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: AI.neonGreen + '15', borderRadius: 12, padding: 12, marginTop: 12, borderWidth: 1, borderColor: AI.neonGreen + '40' },
-  photoConfirmText: { flex: 1, fontSize: 14, color: AI.neonGreen, fontWeight: '600' },
+  // Scan type chips
+  scanTypeChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F0F0F0', borderRadius: 20, paddingVertical: 8, paddingHorizontal: 14 },
+  scanTypeChipActive: { backgroundColor: GREEN },
+  scanTypeLabel: { fontSize: 13, fontWeight: '700', color: '#555' },
+  scanHint: { fontSize: 12, color: '#999', marginBottom: 14, fontStyle: 'italic' },
 
-  // ── Nav ────────────────────────────────────────────────────────────────────
-  navBar: { flexDirection: 'row', gap: 12, padding: 16, borderTopWidth: 1, borderTopColor: AI.neonGreen + '20' },
-  backBtn: { width: 52, height: 52, borderRadius: 14, borderWidth: 1.5, borderColor: AI.neonGreen + '50', justifyContent: 'center', alignItems: 'center' },
-  nextBtn: { flex: 1, borderRadius: 14, overflow: 'hidden' },
-  nextBtnGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 16 },
-  nextBtnText: { fontSize: 16, fontWeight: '800', color: AI.bg },
+  // Capture buttons
+  captureRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  captureBtn: { flex: 1, borderRadius: 14, overflow: 'hidden' },
+  captureBtnGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16 },
+  captureBtnOutline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 16, borderWidth: 2, borderColor: GREEN, borderRadius: 14 },
+  captureBtnTxt: { fontSize: 13, fontWeight: '800', color: '#fff' },
 
-  // ── Processing ─────────────────────────────────────────────────────────────
-  processingScreen: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  processingContainer: { alignItems: 'center', paddingHorizontal: 30 },
-  processingTitle: { fontSize: 22, fontWeight: '900', color: AI.text, marginTop: 20 },
-  processingCrop: { fontSize: 15, color: AI.neonGreen, fontWeight: '700', marginTop: 6, letterSpacing: 1 },
+  // Photo count
+  photoCountRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  photoCountTxt: { fontSize: 12, color: '#888', fontWeight: '600' },
+  photoCountBar: { flexDirection: 'row', gap: 6 },
+  photoCountDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: '#E0E0E0' },
+  photoCountDotFilled: { backgroundColor: GREEN },
 
-  scanFrame: { width: 180, height: 180, borderRadius: 16, overflow: 'hidden', position: 'absolute', borderWidth: 0 },
-  scanCorner: { position: 'absolute', width: 20, height: 20, borderColor: AI.neonGreen },
-  scanLineBar: { width: '100%', height: 2, backgroundColor: AI.neonGreen + '80', shadowColor: AI.neonGreen, shadowOpacity: 1, shadowRadius: 6 },
+  // Photo grid
+  photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  photoThumb: {
+    width: (SCREEN_W - 32 - 10) / 2,
+    height: 130, borderRadius: 12, overflow: 'hidden',
+    backgroundColor: '#EEE',
+    position: 'relative',
+  },
+  photoThumbImg:   { width: '100%', height: '100%' },
+  photoTag:        { position: 'absolute', bottom: 8, left: 8, backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 },
+  photoTagTxt:     { fontSize: 10, fontWeight: '800', color: '#fff' },
+  photoAiTag:      { position: 'absolute', top: 8, left: 8, flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: '#fff', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  photoAiTxt:      { fontSize: 9, fontWeight: '800', color: GREEN },
+  photoRemove:     { position: 'absolute', top: 6, right: 6 },
+  photoAddMore:    {
+    width: (SCREEN_W - 32 - 10) / 2,
+    height: 130, borderRadius: 12,
+    borderWidth: 2, borderColor: '#DDD', borderStyle: 'dashed',
+    justifyContent: 'center', alignItems: 'center', gap: 6,
+  },
+  photoAddMoreTxt: { fontSize: 11, color: '#CCC', fontWeight: '600' },
 
-  stepsList: { marginTop: 24, width: '100%', gap: 8 },
-  stepItem: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  stepDot2: { width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center' },
-  stepItemText: { fontSize: 13, color: AI.textSub, fontWeight: '600' },
+  // Buttons
+  primaryBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: BLUE, borderRadius: 14, paddingVertical: 16, marginTop: 20 },
+  primaryBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '900', letterSpacing: 0.3 },
+  btnDisabled:   { opacity: 0.45 },
+  backBtn:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 14, marginTop: 8 },
+  backBtnTxt:    { fontSize: 13, color: '#888', fontWeight: '600' },
 
-  dotsRow: { flexDirection: 'row', gap: 10, marginTop: 28 },
-  loadingDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: AI.neonGreen, shadowColor: AI.neonGreen, shadowOpacity: 1, shadowRadius: 6 },
+  // Live weather tag
+  liveTag:  { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#E8F5E9', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  liveDot:  { width: 7, height: 7, borderRadius: 3.5, backgroundColor: GREEN },
+  liveTxt:  { fontSize: 10, fontWeight: '900', color: GREEN },
+  weatherLoading:    { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 20 },
+  weatherLoadingTxt: { fontSize: 13, color: '#888' },
 
-  // ── Results ────────────────────────────────────────────────────────────────
-  resultsScroll: { flex: 1 },
-  resultsHeader: { padding: 24, paddingTop: 50, alignItems: 'flex-start' },
-  resultsAIBadge: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  resultsEmoji: { fontSize: 44 },
-  resultsBigTitle: { fontSize: 24, fontWeight: '900', color: AI.text },
-  resultsSubtitle: { fontSize: 13, color: AI.neonGreen, marginTop: 4, fontWeight: '600' },
-  resultsPadding: { padding: 16, paddingBottom: 40 },
+  // Condition grid (2×2)
+  condGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  condCard: {
+    width: (SCREEN_W - 32 - 10) / 2,
+    backgroundColor: '#fff', borderRadius: 14, padding: 14,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+    alignItems: 'flex-start',
+  },
+  condIconWrap: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 10 },
+  condLabel:    { fontSize: 9, fontWeight: '900', color: '#AAA', letterSpacing: 1.5, marginBottom: 4 },
+  condValue:    { fontSize: 22, fontWeight: '900', marginBottom: 2 },
+  condSub:      { fontSize: 10, color: '#888', lineHeight: 14 },
 
-  resultCard: { borderRadius: 18, overflow: 'hidden', borderWidth: 1.5, marginBottom: 14 },
-  resultCardGradient: { padding: 16 },
-  resultCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 },
-  resultCardIcon: { width: 44, height: 44, borderRadius: 12, borderWidth: 1, justifyContent: 'center', alignItems: 'center' },
-  resultCardTitle: { flex: 1, fontSize: 16, fontWeight: '800' },
-  resultCardBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4 },
-  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: AI.neonGreen },
-  liveText: { fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  // Soil grid
+  soilGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  soilCard: {
+    width: (SCREEN_W - 32 - 10) / 2,
+    backgroundColor: '#fff', borderRadius: 14, overflow: 'hidden',
+    borderWidth: 2, borderColor: '#E8E8E8',
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, elevation: 2,
+  },
+  soilImg:     { width: '100%', height: 85 },
+  soilCheck:   { position: 'absolute', top: 6, right: 6, backgroundColor: '#fff', borderRadius: 10 },
+  soilFooter:  { padding: 10 },
+  soilName:    { fontSize: 13, fontWeight: '700', color: '#1A1A1A', marginBottom: 3 },
+  soilDesc:    { fontSize: 10, color: '#888', lineHeight: 14, marginBottom: 4 },
+  soilCrops:   { fontSize: 9, color: '#AAA', fontWeight: '600' },
 
-  recRow: { flexDirection: 'row', gap: 12, marginBottom: 14, alignItems: 'flex-start' },
-  recIndex: { width: 28, height: 28, borderRadius: 8, justifyContent: 'center', alignItems: 'center' },
-  recIndexText: { fontSize: 13, fontWeight: '800' },
-  recName: { fontSize: 14, fontWeight: '700', color: AI.text, marginBottom: 8, lineHeight: 20 },
-  recMetaRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  recMetaChip: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: AI.neonGreen + '20', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 },
-  recMetaText: { fontSize: 11, fontWeight: '700' },
+  // Results header
+  resultsHeader:     { borderRadius: 18, overflow: 'hidden', marginBottom: 14 },
+  resultsHeaderGrad: { padding: 22 },
+  verifiedBadge:     { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start', backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 12 },
+  verifiedTxt:       { fontSize: 10, fontWeight: '900', color: '#fff', letterSpacing: 1 },
+  resultsTitle:      { fontSize: 26, fontWeight: '900', color: '#fff', marginBottom: 6 },
+  resultsSub:        { fontSize: 13, color: 'rgba(255,255,255,0.75)', lineHeight: 19, marginBottom: 16 },
+  resultsStats:      { flexDirection: 'row', backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 12, padding: 14 },
+  resultsStat:       { flex: 1, alignItems: 'center' },
+  resultsStatVal:    { fontSize: 22, fontWeight: '900', color: '#fff' },
+  resultsStatLbl:    { fontSize: 9, color: 'rgba(255,255,255,0.65)', textAlign: 'center', marginTop: 4, lineHeight: 12 },
+  resultsStatDiv:    { width: 1, backgroundColor: 'rgba(255,255,255,0.2)' },
 
-  warningText: { fontSize: 14, color: AI.neonOrange, lineHeight: 22, fontWeight: '500' },
-  adviceText: { fontSize: 14, color: AI.neonBlue, lineHeight: 22, fontWeight: '500' },
+  // Download button
+  downloadBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#EFF6FF', borderRadius: 14, paddingVertical: 14, marginBottom: 16, borderWidth: 1, borderColor: BLUE + '30' },
+  downloadBtnTxt: { fontSize: 12, fontWeight: '900', color: BLUE, letterSpacing: 0.5 },
 
-  shopResultBtn: { borderRadius: 16, overflow: 'hidden', marginBottom: 12 },
-  shopResultGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 18 },
-  shopResultText: { fontSize: 16, fontWeight: '800', color: AI.bg },
-  retryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14, borderWidth: 1.5, borderColor: AI.neonGreen + '50', borderRadius: 14 },
-  retryText: { fontSize: 15, fontWeight: '700', color: AI.neonGreen },
+  // Cards
+  card:         { backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 14, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8, elevation: 3 },
+  cardTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  cardTitle:    { fontSize: 11, fontWeight: '900', color: '#AAA', letterSpacing: 1.2 },
+  cardSubtitle: { fontSize: 12, color: '#888', marginBottom: 14, lineHeight: 17 },
+
+  // Scan result badge
+  scanResultBadge:    { borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  scanResultBadgeTxt: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+
+  // Photo result row
+  photoResultRow: { flexDirection: 'row', gap: 12, marginBottom: 16, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  photoResultThumbWrap: { position: 'relative' },
+  photoResultThumb:    { width: 90, height: 100, borderRadius: 12 },
+  photoResultScanTag:  { position: 'absolute', bottom: 6, left: 0, right: 0, alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.65)', paddingVertical: 3 },
+  photoResultScanTxt:  { fontSize: 9, color: '#fff', fontWeight: '700' },
+  photoResultInfo:     { flex: 1 },
+  photoResultIdx:      { fontSize: 9, color: '#AAA', fontWeight: '700', letterSpacing: 0.8, marginBottom: 3 },
+  photoResultDisease:  { fontSize: 14, fontWeight: '800', color: '#1A1A1A', marginBottom: 6 },
+  confRow:     { flexDirection: 'row', alignItems: 'center', gap: 8, marginVertical: 6 },
+  confLabel:   { fontSize: 9, color: '#AAA', width: 60 },
+  confBarWrap: { flex: 1, height: 5, backgroundColor: '#F0F0F0', borderRadius: 3, overflow: 'hidden' },
+  confBarFill: { height: '100%', borderRadius: 3 },
+  confPct:     { fontSize: 11, fontWeight: '800', width: 32, textAlign: 'right' },
+  photoResultDesc: { fontSize: 11, color: '#888', lineHeight: 15 },
+
+  // Diagnosis header
+  diagHeaderRow:  { flexDirection: 'row', gap: 14, marginBottom: 16 },
+  diagCropImg:    { width: 90, height: 90, borderRadius: 14 },
+  diagHeaderInfo: { flex: 1, justifyContent: 'center' },
+  diagCropName:   { fontSize: 20, fontWeight: '900', color: '#1A1A1A', marginBottom: 3 },
+  diagSeason:     { fontSize: 11, color: '#888', marginBottom: 2 },
+  diagPrevCrop:   { fontSize: 11, color: '#888' },
+  diagDivider:    { height: 1, backgroundColor: '#F0F0F0', marginBottom: 14 },
+  diagItem:       { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
+  diagDot:        { width: 8, height: 8, borderRadius: 4 },
+  diagItemName:   { flex: 1, fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
+  severityBadge:  { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  severityBadgeTxt: { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+
+  // Severity pill
+  severityPill:    { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 3, marginTop: 4 },
+  severityPillTxt: { fontSize: 9, fontWeight: '900', letterSpacing: 0.8 },
+
+  // Disease cards
+  diseaseCard: {
+    backgroundColor: '#fff', borderRadius: 14, padding: 14,
+    marginBottom: 10, borderLeftWidth: 4,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+  },
+  diseaseCardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 10 },
+  diseaseIconBg:     { width: 40, height: 40, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  diseaseName:       { fontSize: 15, fontWeight: '800', color: '#1A1A1A', marginBottom: 2 },
+  diseaseDesc:       { fontSize: 12, color: '#555', lineHeight: 18 },
+  cameraDetectedBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#EFF6FF', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 4, alignSelf: 'flex-start' },
+  cameraDetectedTxt:   { fontSize: 8, fontWeight: '900', color: BLUE, letterSpacing: 0.5 },
+
+  // Soil health
+  soilHealthScore: { fontSize: 18, fontWeight: '900' },
+  phRow:     { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+  phLabel:   { width: 90, fontSize: 12, color: '#666', fontWeight: '600' },
+  phBarWrap: { flex: 1, height: 7, backgroundColor: '#F0F0F0', borderRadius: 4, overflow: 'hidden' },
+  phBarFill: { height: '100%', borderRadius: 4 },
+  phValue:   { width: 50, fontSize: 12, fontWeight: '800', color: '#1A1A1A', textAlign: 'right' },
+  soilNote:  { fontSize: 12, color: '#555', lineHeight: 18, marginTop: 4 },
+  soilWeatherNote: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#FFF8F0', borderRadius: 10, padding: 10, marginTop: 12 },
+  soilWeatherNoteTxt: { flex: 1, fontSize: 11, color: '#555', lineHeight: 16 },
+
+  // Fertilizer
+  fertRow:       { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 },
+  fertRowBorder: { borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  fertIconWrap:  { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  fertTopRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  fertName:      { fontSize: 14, fontWeight: '800', color: '#1A1A1A', flex: 1 },
+  fertBadge:     { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 3, marginLeft: 8 },
+  fertBadgeTxt:  { fontSize: 9, fontWeight: '900', letterSpacing: 0.5 },
+  fertDose:      { fontSize: 13, color: '#333', fontWeight: '700', marginBottom: 2 },
+  fertTiming:    { fontSize: 11, color: '#999' },
+
+  // Pesticide
+  topRatedBadge: { backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  topRatedTxt:   { fontSize: 9, fontWeight: '900', color: GREEN, letterSpacing: 0.8 },
+  pestHeader:    { flexDirection: 'row', alignItems: 'center', gap: 14, marginVertical: 14 },
+  pestIconWrap:  { width: 58, height: 58, borderRadius: 14, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center' },
+  pestName:      { fontSize: 15, fontWeight: '800', color: '#1A1A1A', marginBottom: 4, flex: 1 },
+  pestTagline:   { fontSize: 11, color: '#888' },
+  pestStatsRow:  { flexDirection: 'row', backgroundColor: '#F8F9FA', borderRadius: 12, overflow: 'hidden', marginBottom: 14 },
+  pestStatCell:  { flex: 1, padding: 14, alignItems: 'center' },
+  pestStatLabel: { fontSize: 9, fontWeight: '900', color: '#AAA', letterSpacing: 1, marginBottom: 5 },
+  pestStatValue: { fontSize: 13, fontWeight: '800', color: '#1A1A1A' },
+  pestStatDiv:   { width: 1, backgroundColor: '#E0E0E0' },
+  safetyBox:     { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#FFF8F0', borderRadius: 10, padding: 12, marginBottom: 12, borderWidth: 1, borderColor: ORANGE + '30' },
+  safetyTitle:   { fontSize: 9, fontWeight: '900', letterSpacing: 0.8, marginBottom: 3 },
+  safetyDesc:    { fontSize: 12, color: '#555', lineHeight: 17 },
+  mixingBtn:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 1.5, borderColor: '#DDD', borderRadius: 12, paddingVertical: 13 },
+  mixingBtnTxt:  { fontSize: 12, fontWeight: '700', color: BLUE },
+
+  // Analyzing overlay — enhanced sphere
+  overlaySphereWrap: { width: 190, height: 190, justifyContent: 'center', alignItems: 'center', marginBottom: 24 },
+  overlayGlow: {
+    position: 'absolute',
+    width: 110, height: 110, borderRadius: 55,
+    backgroundColor: GREEN + '35',
+    top: 40, left: 40,
+  },
+  scanIconWrap: {
+    position: 'absolute',
+    width: 90, height: 90, borderRadius: 45,
+    backgroundColor: GREEN + '20',
+    justifyContent: 'center', alignItems: 'center',
+    top: 50, left: 50,
+    borderWidth: 2, borderColor: GREEN + '40',
+  },
+});
+
+// ─── HeroBanner styles ───────────────────────────────────────────────────────
+const HB = StyleSheet.create({
+  wrap: {
+    height: 160, borderRadius: 18, overflow: 'hidden',
+    marginBottom: 4,
+  },
+  contentRow: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 20, paddingVertical: 16,
+  },
+  sphereWrap: { width: 140, height: 140 },
+  glowRing: {
+    position: 'absolute', width: 70, height: 70, borderRadius: 35,
+    backgroundColor: GREEN + '40',
+    top: 35, left: 35,
+    shadowColor: GREEN, shadowOpacity: 0.8, shadowRadius: 12, elevation: 4,
+  },
+  centerIcon: {
+    position: 'absolute', top: 45, left: 45,
+    width: 50, height: 50, borderRadius: 25, overflow: 'hidden',
+  },
+  centerGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  textArea: { flex: 1, paddingLeft: 16 },
+  aiChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: GREEN + '25', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 4,
+    alignSelf: 'flex-start', marginBottom: 10,
+    borderWidth: 1, borderColor: GREEN + '40',
+  },
+  aiChipTxt: { fontSize: 9, fontWeight: '900', color: GREEN, letterSpacing: 1.2 },
+  heroTitle: { fontSize: 18, fontWeight: '900', color: '#FFFFFF', lineHeight: 24, marginBottom: 6 },
+  heroSub:   { fontSize: 11, color: 'rgba(255,255,255,0.55)', lineHeight: 17 },
+});
+
+// ─── ScanModeBanner styles ───────────────────────────────────────────────────
+const SMB = StyleSheet.create({
+  wrap: {
+    height: 130, borderRadius: 18, overflow: 'hidden',
+    marginBottom: 4,
+  },
+  frameWrap: {
+    position: 'absolute', left: 20, top: 13,
+    width: 104, height: 104,
+  },
+  textArea: {
+    position: 'absolute', left: 144, top: 16, right: 16,
+  },
+  chip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: GREEN + '25', borderRadius: 8,
+    paddingHorizontal: 8, paddingVertical: 3,
+    alignSelf: 'flex-start', marginBottom: 8,
+    borderWidth: 1, borderColor: GREEN + '30',
+  },
+  chipTxt: { fontSize: 8, fontWeight: '900', color: GREEN, letterSpacing: 1 },
+  title:   { fontSize: 15, fontWeight: '900', color: '#FFFFFF', marginBottom: 5, lineHeight: 19 },
+  sub:     { fontSize: 10, color: 'rgba(255,255,255,0.55)', lineHeight: 15 },
 });

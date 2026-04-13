@@ -1,216 +1,340 @@
+/**
+ * OrderConfirmedScreen — Redesigned to match KisanMart reference UI
+ * Green gradient header, breathing circles, spring checkmark, staggered item list
+ */
 import React, { useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, Animated,
+  Animated, Easing, Image, Dimensions,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS, SHADOWS, RADIUS, TYPE } from '../../constants/colors';
+import { useLanguage } from '../../context/LanguageContext';
 
-const PAYMENT_LABELS = { cod: 'Cash on Delivery', upi: 'UPI Payment', card: 'Card Payment' };
-const PAYMENT_ICONS  = { cod: 'cash-outline',      upi: 'phone-portrait-outline', card: 'card-outline' };
+const W      = Dimensions.get('window').width;
+const GREEN  = '#2D9162';
+const GREEN2 = '#16A34A';
+const BG     = '#F4F6F9';
+const CARD   = '#FFFFFF';
+const BORDER = '#E8EAED';
+const MUTED  = '#6B7280';
 
-export default function OrderConfirmedScreen({ route, navigation }) {
-  const { order, paymentMethod, grandTotal } = route.params || {};
+// ── Press scale ───────────────────────────────────────────────────────────────
+function PressScale({ onPress, style, down = 0.96, children }) {
+  const sc = useRef(new Animated.Value(1)).current;
+  return (
+    <Animated.View style={[style, { transform: [{ scale: sc }] }]}>
+      <TouchableOpacity
+        onPress={onPress}
+        onPressIn={() => Animated.spring(sc, { toValue: down, useNativeDriver: true, friction: 8, tension: 200 }).start()}
+        onPressOut={() => Animated.spring(sc, { toValue: 1, useNativeDriver: true, friction: 5, tension: 80 }).start()}
+        activeOpacity={1}
+      >
+        {children}
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
 
-  // ── Animations ──────────────────────────────────────────────────────────────
-  const scaleAnim  = useRef(new Animated.Value(0)).current;
-  const fadeAnim   = useRef(new Animated.Value(0)).current;
-  const slideAnim  = useRef(new Animated.Value(40)).current;
+// ── Staggered item row ────────────────────────────────────────────────────────
+function OrderItemRow({ item, index }) {
+  const op = useRef(new Animated.Value(0)).current;
+  const x  = useRef(new Animated.Value(-12)).current;
 
   useEffect(() => {
-    Animated.sequence([
-      Animated.spring(scaleAnim, { toValue: 1, tension: 80, friction: 6, useNativeDriver: true }),
-      Animated.parallel([
-        Animated.timing(fadeAnim,  { toValue: 1, duration: 400, useNativeDriver: true }),
-        Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
-      ]),
+    Animated.parallel([
+      Animated.timing(op, { toValue: 1, duration: 260, delay: 500 + index * 100, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.spring(x, { toValue: 0, friction: 8, tension: 70, delay: 500 + index * 100, useNativeDriver: true }),
     ]).start();
   }, []);
 
-  const shortId = order?.id ? order.id.slice(0, 8).toUpperCase() : '--------';
-  const itemCount = order?.items?.length ?? 0;
+  const name      = item.product?.name || 'Product';
+  const imageUrl  = item.product?.images?.[0];
+  const price     = item.unitPrice || item.product?.price || 0;
+  const qty       = item.quantity || 1;
+  const lineTotal = item.totalPrice || price * qty;
 
-  // Estimated delivery: 2-4 days from today
+  return (
+    <Animated.View style={{ opacity: op, transform: [{ translateX: x }] }}>
+      <View style={[S.itemRow, index > 0 && { marginTop: 8 }]}>
+        <View style={S.itemImgBox}>
+          {imageUrl
+            ? <Image source={{ uri: imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+            : <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(45,145,98,0.08)' }}>
+                <Ionicons name="leaf" size={18} color={GREEN} />
+              </View>
+          }
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={S.itemName} numberOfLines={1}>{name}</Text>
+          <Text style={S.itemMeta}>Qty: {qty} × ₹{price.toLocaleString()}</Text>
+        </View>
+        <Text style={S.itemTotal}>₹{lineTotal.toLocaleString()}</Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+export default function OrderConfirmedScreen({ route, navigation }) {
+  const { t } = useLanguage();
+  const insets = useSafeAreaInsets();
+  const { order, paymentMethod, grandTotal } = route.params || {};
+
+  // Hero animations
+  const checkSc    = useRef(new Animated.Value(0)).current;
+  const checkRot   = useRef(new Animated.Value(-180)).current;  // rotate degrees (faked via interpolate)
+  const titleOp    = useRef(new Animated.Value(0)).current;
+  const titleY     = useRef(new Animated.Value(10)).current;
+  const subOp      = useRef(new Animated.Value(0)).current;
+
+  // Breathing circle animations
+  const circle1    = useRef(new Animated.Value(1)).current;
+  const circle2    = useRef(new Animated.Value(1)).current;
+
+  // Content card animations
+  const cardOp     = useRef(new Animated.Value(0)).current;
+  const cardY      = useRef(new Animated.Value(30)).current;
+  const delivOp    = useRef(new Animated.Value(0)).current;
+  const delivY     = useRef(new Animated.Value(20)).current;
+  const btnOp      = useRef(new Animated.Value(0)).current;
+  const btnY       = useRef(new Animated.Value(20)).current;
+
+  useEffect(() => {
+    // 1) Spring-pop the checkmark
+    Animated.sequence([
+      Animated.spring(checkSc, { toValue: 1, tension: 200, friction: 15, useNativeDriver: true }),
+    ]).start();
+
+    // 2) Title fades in after checkmark
+    Animated.parallel([
+      Animated.timing(titleOp, { toValue: 1, duration: 350, delay: 200, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.spring(titleY, { toValue: 0, friction: 8, tension: 60, delay: 200, useNativeDriver: true }),
+    ]).start();
+
+    // 3) Sub text
+    Animated.timing(subOp, { toValue: 1, duration: 300, delay: 350, useNativeDriver: true }).start();
+
+    // 4) Content cards slide up
+    Animated.parallel([
+      Animated.timing(cardOp, { toValue: 1, duration: 360, delay: 400, easing: Easing.out(Easing.ease), useNativeDriver: true }),
+      Animated.spring(cardY, { toValue: 0, friction: 8, tension: 60, delay: 400, useNativeDriver: true }),
+    ]).start();
+
+    // 5) Delivery card
+    Animated.parallel([
+      Animated.timing(delivOp, { toValue: 1, duration: 300, delay: 600, useNativeDriver: true }),
+      Animated.spring(delivY, { toValue: 0, friction: 8, tension: 60, delay: 600, useNativeDriver: true }),
+    ]).start();
+
+    // 6) Button
+    Animated.parallel([
+      Animated.timing(btnOp, { toValue: 1, duration: 300, delay: 700, useNativeDriver: true }),
+      Animated.spring(btnY, { toValue: 0, friction: 8, tension: 60, delay: 700, useNativeDriver: true }),
+    ]).start();
+
+    // Breathing circles loop
+    Animated.loop(Animated.sequence([
+      Animated.timing(circle1, { toValue: 1.2, duration: 4000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(circle1, { toValue: 1, duration: 4000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ])).start();
+    Animated.loop(Animated.sequence([
+      Animated.timing(circle2, { toValue: 1.3, duration: 3000, easing: Easing.inOut(Easing.ease), useNativeDriver: true, delay: 500 }),
+      Animated.timing(circle2, { toValue: 1, duration: 3000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ])).start();
+  }, []);
+
+  // Data
+  const shortId   = order?.id ? order.id.slice(0, 8).toUpperCase() : '--------';
+  const items     = order?.items || [];
+  const totalAmt  = grandTotal || order?.totalAmount || 0;
+
   const today = new Date();
   const from  = new Date(today); from.setDate(today.getDate() + 2);
   const to    = new Date(today); to.setDate(today.getDate() + 4);
-  const fmt   = (d) => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  const fmt   = d => d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   const delivEst = `${fmt(from)} – ${fmt(to)}`;
 
+  const PAY_LABEL = { cod: 'Cash on Delivery', upi: 'UPI Payment', card: 'Card' };
+  const PAY_BADGE_BG = { cod: '#DCFCE7', upi: '#DBEAFE', card: '#FFEDD5' };
+  const PAY_BADGE_TXT = { cod: '#16A34A', upi: '#2563EB', card: '#EA580C' };
+
   return (
-    <SafeAreaView style={S.container}>
-      <ScrollView contentContainerStyle={S.scroll} showsVerticalScrollIndicator={false}>
+    <View style={{ flex: 1, backgroundColor: BG }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 32 }}>
 
-        {/* ── Success icon ─────────────────────────────────────────────── */}
-        <View style={S.heroArea}>
-          <Animated.View style={[S.circleOuter, { transform: [{ scale: scaleAnim }] }]}>
-            <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={S.circleInner}>
-              <Ionicons name="checkmark" size={52} color="#fff" />
-            </LinearGradient>
+        {/* ── Green gradient success header ── */}
+        <LinearGradient
+          colors={[GREEN, GREEN2, '#14532D']}
+          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+          style={[S.heroGrad, { paddingTop: insets.top + 16 }]}
+        >
+          {/* Breathing decorative circles */}
+          <Animated.View style={[S.decorCircle1, { transform: [{ scale: circle1 }] }]} />
+          <Animated.View style={[S.decorCircle2, { transform: [{ scale: circle2 }] }]} />
+
+          {/* Spring checkmark */}
+          <Animated.View style={[S.checkWrap, { transform: [{ scale: checkSc }] }]}>
+            <View style={S.checkInner}>
+              <Ionicons name="checkmark" size={32} color={GREEN} strokeWidth={3} />
+            </View>
           </Animated.View>
 
-          <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
-            <Text style={S.heroTitle}>Order Placed!</Text>
-            <Text style={S.heroSub}>Your order has been confirmed successfully</Text>
+          {/* Title */}
+          <Animated.View style={{ opacity: titleOp, transform: [{ translateY: titleY }] }}>
+            <Text style={S.heroTitle}>Order Placed Successfully!</Text>
           </Animated.View>
-        </View>
 
-        {/* ── Order details card ───────────────────────────────────────── */}
-        <Animated.View style={[S.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-          <Text style={S.cardTitle}>Order Details</Text>
+          {/* Sub */}
+          <Animated.Text style={[S.heroSub, { opacity: subOp }]}>
+            तुमचा ऑर्डर यशस्वीरित्या पुष्टी झाला
+          </Animated.Text>
+        </LinearGradient>
 
-          <View style={S.detailRow}>
-            <Text style={S.detailLabel}>Order ID</Text>
-            <Text style={S.detailValue}># {shortId}</Text>
-          </View>
-          <View style={S.detailRow}>
-            <Text style={S.detailLabel}>Items</Text>
-            <Text style={S.detailValue}>{itemCount} item{itemCount !== 1 ? 's' : ''}</Text>
-          </View>
-          <View style={S.detailRow}>
-            <Text style={S.detailLabel}>Total Paid</Text>
-            <Text style={[S.detailValue, { color: COLORS.primary, fontWeight: TYPE.weight.black }]}>
-              ₹{(grandTotal || order?.totalAmount || 0).toLocaleString()}
-            </Text>
-          </View>
-          <View style={S.detailRow}>
-            <Text style={S.detailLabel}>Payment</Text>
-            <View style={S.payBadge}>
-              <Ionicons name={PAYMENT_ICONS[paymentMethod] || 'cash-outline'} size={13} color={COLORS.primary} />
-              <Text style={S.payBadgeTxt}>{PAYMENT_LABELS[paymentMethod] || 'Cash on Delivery'}</Text>
+        {/* ── Order details card ── */}
+        <Animated.View style={[S.card, { marginTop: 16, opacity: cardOp, transform: [{ translateY: cardY }] }]}>
+          {/* Card header */}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <Text style={S.cardTitle}>Order Details</Text>
+            <View style={S.orderIdBadge}>
+              <Text style={S.orderIdTxt}>#{shortId}</Text>
             </View>
           </View>
-          <View style={[S.detailRow, { borderBottomWidth: 0 }]}>
-            <Text style={S.detailLabel}>Est. Delivery</Text>
-            <Text style={S.detailValue}>{delivEst}</Text>
-          </View>
-        </Animated.View>
 
-        {/* ── Items ordered ─────────────────────────────────────────────── */}
-        {order?.items?.length > 0 && (
-          <Animated.View style={[S.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-            <Text style={S.cardTitle}>Items Ordered</Text>
-            {order.items.map((item, idx) => (
-              <View key={item.id || idx} style={[S.itemRow, idx === order.items.length - 1 && { borderBottomWidth: 0 }]}>
-                <View style={S.itemDot} />
-                <View style={{ flex: 1 }}>
-                  <Text style={S.itemName} numberOfLines={2}>{item.product?.name || 'Product'}</Text>
-                  <Text style={S.itemMeta}>Qty: {item.quantity} × ₹{item.unitPrice?.toLocaleString()}</Text>
-                </View>
-                <Text style={S.itemTotal}>₹{item.totalPrice?.toLocaleString()}</Text>
-              </View>
-            ))}
-          </Animated.View>
-        )}
-
-        {/* ── What's next ───────────────────────────────────────────────── */}
-        <Animated.View style={[S.card, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
-          <Text style={S.cardTitle}>What's Next?</Text>
-
+          {/* Details */}
           {[
-            { icon: 'mail-outline',    color: '#5B4CF5', text: 'Order confirmation sent to your phone' },
-            { icon: 'cube-outline',    color: COLORS.primary, text: 'Packed & dispatched within 24 hours' },
-            { icon: 'car-outline',     color: '#E76F51', text: `Delivered by ${delivEst}` },
-            { icon: 'star-outline',    color: COLORS.gold, text: 'Rate your experience after delivery' },
-          ].map((step, i) => (
-            <View key={i} style={S.stepRow}>
-              <View style={[S.stepIcon, { backgroundColor: step.color + '18' }]}>
-                <Ionicons name={step.icon} size={18} color={step.color} />
+            { icon: 'cube-outline',      label: 'Items',          value: `${items.length} item${items.length !== 1 ? 's' : ''}` },
+            { icon: 'cash-outline',      label: 'Total Paid',     value: `₹${totalAmt.toLocaleString()}`, green: true },
+            { icon: 'card-outline',      label: 'Payment',        badge: true },
+            { icon: 'car-outline',       label: 'Est. Delivery',  value: delivEst },
+          ].map((row, i) => (
+            <View key={i} style={[S.detailRow, i === 3 && { borderBottomWidth: 0 }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name={row.icon} size={16} color={MUTED} />
+                <Text style={S.detailLabel}>{row.label}</Text>
               </View>
-              <Text style={S.stepTxt}>{step.text}</Text>
+              {row.badge ? (
+                <View style={[S.payBadge, { backgroundColor: PAY_BADGE_BG[paymentMethod] || '#F3F4F6' }]}>
+                  <Text style={[S.payBadgeTxt, { color: PAY_BADGE_TXT[paymentMethod] || '#555' }]}>
+                    {PAY_LABEL[paymentMethod] || 'Cash on Delivery'}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={[S.detailValue, row.green && { color: GREEN, fontWeight: '800' }]}>{row.value}</Text>
+              )}
             </View>
           ))}
+
+          {/* Items ordered */}
+          {items.length > 0 && (
+            <>
+              <View style={{ borderTopWidth: 1, borderTopColor: BORDER, marginTop: 4, paddingTop: 14, marginBottom: 6 }}>
+                <Text style={[S.cardTitle, { marginBottom: 8 }]}>Items Ordered</Text>
+              </View>
+              {items.map((item, i) => (
+                <OrderItemRow key={item.id || i} item={item} index={i} />
+              ))}
+            </>
+          )}
         </Animated.View>
 
-        <View style={{ height: 20 }} />
+        {/* ── Estimated delivery card ── */}
+        <Animated.View style={[S.delivCard, { opacity: delivOp, transform: [{ translateY: delivY }] }]}>
+          <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(45,145,98,0.12)', justifyContent: 'center', alignItems: 'center' }}>
+            <Ionicons name="car-outline" size={18} color={GREEN} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: '#1A1A1A' }}>Expected Delivery</Text>
+            <Text style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>{delivEst}</Text>
+          </View>
+          <Ionicons name="time-outline" size={18} color={MUTED} />
+        </Animated.View>
+
+        {/* ── Continue Shopping button ── */}
+        <Animated.View style={[{ paddingHorizontal: 16, marginTop: 12, opacity: btnOp, transform: [{ translateY: btnY }] }]}>
+          <PressScale onPress={() => navigation.navigate('AgriStoreHome')} down={0.97} style={{ borderRadius: 16, overflow: 'hidden' }}>
+            <LinearGradient colors={[GREEN, GREEN2]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={S.ctaBtn}>
+              <Ionicons name="bag-outline" size={18} color="#fff" />
+              <Text style={S.ctaTxt}>Continue Shopping</Text>
+            </LinearGradient>
+          </PressScale>
+        </Animated.View>
+
+        {/* Thank you note */}
+        <Animated.Text style={[S.thanksTxt, { opacity: btnOp }]}>
+          Thank you for shopping with FarmEasy!
+        </Animated.Text>
+
       </ScrollView>
-
-      {/* ── Bottom buttons ────────────────────────────────────────────────── */}
-      <Animated.View style={[S.footer, { opacity: fadeAnim }]}>
-        <TouchableOpacity
-          style={S.trackBtn}
-          onPress={() => navigation.navigate('AgriStoreHome')}
-        >
-          <Ionicons name="storefront-outline" size={18} color={COLORS.primary} />
-          <Text style={S.trackBtnTxt}>Continue Shopping</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={S.homeBtn}
-          onPress={() => navigation.navigate('AgriStoreHome')}
-        >
-          <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={S.homeBtnGrad}>
-            <Ionicons name="home-outline" size={18} color="#fff" />
-            <Text style={S.homeBtnTxt}>Go to Home</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const S = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
-  scroll: { padding: 20, gap: 14 },
-
   // Hero
-  heroArea: { alignItems: 'center', paddingVertical: 28, gap: 18 },
-  circleOuter: {
-    width: 110, height: 110, borderRadius: 55,
-    backgroundColor: COLORS.primaryPale, justifyContent: 'center', alignItems: 'center',
-    ...SHADOWS.greenGlow,
+  heroGrad: {
+    paddingHorizontal: 20, paddingBottom: 28,
+    alignItems: 'center', gap: 8,
+    position: 'relative', overflow: 'hidden',
   },
-  circleInner: { width: 90, height: 90, borderRadius: 45, justifyContent: 'center', alignItems: 'center' },
-  heroTitle: { fontSize: TYPE.size.xxl, fontWeight: TYPE.weight.black, color: COLORS.textDark, textAlign: 'center' },
-  heroSub: { fontSize: TYPE.size.sm, color: COLORS.textMedium, textAlign: 'center', marginTop: 4 },
+  decorCircle1: {
+    position: 'absolute', top: -30, right: -30,
+    width: 140, height: 140, borderRadius: 70, backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  decorCircle2: {
+    position: 'absolute', bottom: -20, left: -20,
+    width: 90, height: 90, borderRadius: 45, backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  checkWrap: {
+    width: 60, height: 60, borderRadius: 30,
+    backgroundColor: '#fff', justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, elevation: 6,
+    marginBottom: 4,
+  },
+  checkInner: { justifyContent: 'center', alignItems: 'center' },
+  heroTitle:  { fontSize: 18, fontWeight: '800', color: '#fff', textAlign: 'center' },
+  heroSub:    { fontSize: 13, color: 'rgba(255,255,255,0.75)', textAlign: 'center' },
 
-  // Cards
-  card: { backgroundColor: COLORS.surface, borderRadius: RADIUS.xl, padding: 16, ...SHADOWS.small },
-  cardTitle: { fontSize: TYPE.size.base, fontWeight: TYPE.weight.black, color: COLORS.textDark, marginBottom: 14 },
+  // Card
+  card: {
+    marginHorizontal: 16, backgroundColor: CARD, borderRadius: 20,
+    padding: 16, borderWidth: 1, borderColor: BORDER,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 4,
+  },
+  cardTitle:    { fontSize: 15, fontWeight: '800', color: '#1A1A1A' },
+  orderIdBadge: { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 4 },
+  orderIdTxt:   { fontSize: 12, fontWeight: '700', color: '#555', fontVariant: ['tabular-nums'] },
 
   // Detail rows
   detailRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.divider,
+    paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: BORDER,
   },
-  detailLabel: { fontSize: TYPE.size.sm, color: COLORS.textMedium },
-  detailValue: { fontSize: TYPE.size.sm, fontWeight: TYPE.weight.semibold, color: COLORS.textDark },
-  payBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: COLORS.primaryPale, borderRadius: RADIUS.full,
-    paddingHorizontal: 10, paddingVertical: 4,
-  },
-  payBadgeTxt: { fontSize: 12, fontWeight: TYPE.weight.bold, color: COLORS.primary },
+  detailLabel: { fontSize: 13, color: MUTED },
+  detailValue: { fontSize: 13, fontWeight: '600', color: '#1A1A1A' },
+  payBadge:    { borderRadius: 99, paddingHorizontal: 10, paddingVertical: 4 },
+  payBadgeTxt: { fontSize: 12, fontWeight: '700' },
 
-  // Items
-  itemRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: COLORS.divider,
-  },
-  itemDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: COLORS.primaryLight },
-  itemName: { fontSize: TYPE.size.sm, fontWeight: TYPE.weight.semibold, color: COLORS.textDark },
-  itemMeta: { fontSize: 11, color: COLORS.textMedium, marginTop: 2 },
-  itemTotal: { fontSize: TYPE.size.sm, fontWeight: TYPE.weight.black, color: COLORS.primary },
+  // Items list
+  itemRow:    { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#F7F8FA', borderRadius: 12, padding: 10 },
+  itemImgBox: { width: 42, height: 42, borderRadius: 10, overflow: 'hidden', backgroundColor: CARD },
+  itemName:   { fontSize: 13, fontWeight: '700', color: '#1A1A1A' },
+  itemMeta:   { fontSize: 11, color: MUTED, marginTop: 2 },
+  itemTotal:  { fontSize: 14, fontWeight: '800', color: GREEN },
 
-  // Steps
-  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 },
-  stepIcon: { width: 38, height: 38, borderRadius: RADIUS.md, justifyContent: 'center', alignItems: 'center' },
-  stepTxt: { flex: 1, fontSize: TYPE.size.sm, color: COLORS.textMedium },
+  // Delivery card
+  delivCard: {
+    marginHorizontal: 16, marginTop: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: 'rgba(45,145,98,0.06)', borderRadius: 16, padding: 14,
+    borderWidth: 1, borderColor: 'rgba(45,145,98,0.2)',
+  },
 
-  // Footer
-  footer: {
-    flexDirection: 'row', gap: 10, padding: 14, paddingHorizontal: 16,
-    backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border,
-    ...SHADOWS.medium,
-  },
-  trackBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-    borderWidth: 2, borderColor: COLORS.primary, borderRadius: RADIUS.full, paddingVertical: 13,
-  },
-  trackBtnTxt: { fontSize: TYPE.size.sm, fontWeight: TYPE.weight.bold, color: COLORS.primary },
-  homeBtn: { flex: 1, borderRadius: RADIUS.full, overflow: 'hidden' },
-  homeBtnGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 13 },
-  homeBtnTxt: { fontSize: TYPE.size.sm, fontWeight: TYPE.weight.bold, color: '#fff' },
+  // CTA
+  ctaBtn:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 15, borderRadius: 16 },
+  ctaTxt:   { color: '#fff', fontSize: 15, fontWeight: '700' },
+  thanksTxt:{ textAlign: 'center', color: MUTED, fontSize: 12, marginTop: 16, paddingHorizontal: 20 },
 });

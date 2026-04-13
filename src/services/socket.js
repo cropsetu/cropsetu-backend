@@ -1,14 +1,19 @@
 /**
  * Socket.IO client service for FarmEasy real-time features.
  * Singleton pattern — one connection across the whole app.
+ *
+ * Security notes
+ * ──────────────
+ * • URL is pulled from config.js — never hardcode IPs here.
+ * • In production config.js resolves to wss:// (encrypted WebSocket).
+ * • console.log/warn are intentionally absent — socket IDs are
+ *   semi-sensitive session identifiers and must not appear in device logs.
+ * • Call resetSocket() on logout so the old authenticated socket cannot
+ *   receive events for a subsequent user in the same process.
  */
 import { io } from 'socket.io-client';
-import { Platform } from 'react-native';
 import { getAccessToken } from './api';
-
-const SERVER_URL = Platform.OS === 'web'
-  ? 'http://localhost:3000'
-  : 'http://192.168.1.4:3000';
+import { SOCKET_URL } from '../constants/config';
 
 let socket = null;
 
@@ -22,32 +27,30 @@ export async function connectSocket() {
   const token = await getAccessToken();
   if (!token) return null;
 
-  socket = io(SERVER_URL, {
+  socket = io(SOCKET_URL, {
     auth: { token },
     transports: ['websocket'],
     reconnection: true,
     reconnectionAttempts: 5,
     reconnectionDelay: 2000,
-  });
-
-  socket.on('connect', () => {
-    console.log('[Socket] Connected:', socket.id);
-  });
-
-  socket.on('connect_error', (err) => {
-    console.warn('[Socket] Connection error:', err.message);
-  });
-
-  socket.on('disconnect', (reason) => {
-    console.log('[Socket] Disconnected:', reason);
+    reconnectionDelayMax: 10000,
   });
 
   return socket;
 }
 
+/**
+ * Gracefully close and destroy the socket.
+ * Must be called on logout to prevent the old session leaking events
+ * to a new user who logs in without a full app restart.
+ */
 export function disconnectSocket() {
   if (socket) {
+    socket.removeAllListeners();
     socket.disconnect();
     socket = null;
   }
 }
+
+/** Alias used by AuthContext on logout. */
+export const resetSocket = disconnectSocket;

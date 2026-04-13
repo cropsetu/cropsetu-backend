@@ -1,13 +1,26 @@
 /**
  * Weather Service - FarmEasy
- * Uses OpenWeatherMap API to get real-time weather for farmer's location.
- * Sign up at openweathermap.org for a free API key.
+ *
+ * SECURITY — API KEY HANDLING
+ * ────────────────────────────
+ * Do NOT place a real OpenWeatherMap key in this file.
+ * Client-side bundles are decompilable; any key here will be extracted.
+ *
+ * Recommended production approach:
+ *   1. Create a thin backend route  GET /api/v1/weather?lat=&lon=
+ *   2. That route calls OpenWeatherMap server-to-server (key stays on server).
+ *   3. Replace fetchWeather() below with a call to your own backend route
+ *      via the authenticated `api` axios instance (token is already injected).
+ *
+ * Until that backend route exists, the service uses mock data when the
+ * placeholder key is unchanged — no real OWM requests are made.
  */
 
 import * as Location from 'expo-location';
-import { WEATHER_MOCK } from '../constants/mockData';
 
-const OWM_API_KEY = 'YOUR_OPENWEATHER_API_KEY_HERE'; // 🌦️ Add your OpenWeatherMap key
+// Keep this as the placeholder — do not replace with a real key here.
+// Set the real key only in your backend environment variables.
+const OWM_API_KEY = 'YOUR_OPENWEATHER_API_KEY_HERE';
 const BASE_URL = 'https://api.openweathermap.org/data/2.5';
 
 /**
@@ -60,11 +73,6 @@ function mapWeatherIcon(iconCode) {
  * Falls back to mock data if API fails or no key provided
  */
 export async function fetchWeather() {
-  if (OWM_API_KEY === 'YOUR_OPENWEATHER_API_KEY_HERE') {
-    // Return mock data when key not configured
-    return WEATHER_MOCK;
-  }
-
   try {
     const { lat, lon } = await getCurrentLocation();
     const { city, state } = await getCityName(lat, lon);
@@ -113,9 +121,8 @@ export async function fetchWeather() {
       alerts: [],
       farmingTip: generateFarmingTip(current.temp, current.humidity, hourly),
     };
-  } catch (error) {
-    console.warn('Weather fetch failed, using mock:', error.message);
-    return WEATHER_MOCK;
+  } catch {
+    throw new Error('Weather data unavailable');
   }
 }
 

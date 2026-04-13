@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, FlatList,
+  SafeAreaView, FlatList, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SHADOWS } from '../../constants/colors';
-import { CROPS } from '../../constants/mockData';
+import api from '../../services/api';
+import { useLanguage } from '../../context/LanguageContext';
 
-function CropCard({ crop, onPress }) {
+function CropCard({ crop, onPress, t }) {
   return (
     <TouchableOpacity style={styles.cropCard} onPress={() => onPress(crop)} activeOpacity={0.88}>
       <View style={styles.cropCardInner}>
@@ -29,17 +29,17 @@ function CropCard({ crop, onPress }) {
       </View>
       <View style={styles.cropInfo}>
         <View style={styles.cropInfoItem}>
-          <Text style={styles.cropInfoLabel}>Sowing</Text>
+          <Text style={styles.cropInfoLabel}>{t('cropCalendar.sowing')}</Text>
           <Text style={styles.cropInfoValue}>{crop.sowingMonth}</Text>
         </View>
         <View style={styles.cropInfoDivider} />
         <View style={styles.cropInfoItem}>
-          <Text style={styles.cropInfoLabel}>Duration</Text>
+          <Text style={styles.cropInfoLabel}>{t('cropCalendar.duration')}</Text>
           <Text style={styles.cropInfoValue}>{crop.duration}</Text>
         </View>
         <View style={styles.cropInfoDivider} />
         <View style={styles.cropInfoItem}>
-          <Text style={styles.cropInfoLabel}>Harvest</Text>
+          <Text style={styles.cropInfoLabel}>{t('cropCalendar.harvest')}</Text>
           <Text style={styles.cropInfoValue}>{crop.harvestMonth}</Text>
         </View>
       </View>
@@ -47,14 +47,48 @@ function CropCard({ crop, onPress }) {
   );
 }
 
-export default function CropCalendar({ navigation }) {
-  const [searchQuery, setSearchQuery] = useState('');
+const CROP_FALLBACK = [
+  { id: 1, name: 'Tomato', nameHi: 'टमाटर', icon: '🍅', season: 'Kharif / Rabi', sowingMonth: 'Jun–Jul / Oct–Nov', harvestMonth: 'Sep–Oct / Jan–Feb', duration: '90–120 days' },
+  { id: 2, name: 'Wheat',  nameHi: 'गेहूं',  icon: '🌾', season: 'Rabi',          sowingMonth: 'Oct–Nov',           harvestMonth: 'Mar–Apr',           duration: '120–150 days' },
+  { id: 3, name: 'Rice',   nameHi: 'धान',    icon: '🌾', season: 'Kharif',        sowingMonth: 'Jun–Jul',           harvestMonth: 'Oct–Nov',           duration: '100–150 days' },
+  { id: 4, name: 'Cotton', nameHi: 'कपास',   icon: '🪴', season: 'Kharif',        sowingMonth: 'Apr–Jun',           harvestMonth: 'Oct–Jan',           duration: '160–200 days' },
+  { id: 5, name: 'Onion',  nameHi: 'प्याज',  icon: '🧅', season: 'Rabi',          sowingMonth: 'Oct–Dec',           harvestMonth: 'Mar–May',           duration: '90–120 days' },
+  { id: 6, name: 'Soybean',nameHi: 'सोयाबीन',icon: '🫘', season: 'Kharif',        sowingMonth: 'Jun–Jul',           harvestMonth: 'Oct–Nov',           duration: '90–120 days' },
+  { id: 7, name: 'Potato', nameHi: 'आलू',    icon: '🥔', season: 'Rabi',          sowingMonth: 'Oct–Nov',           harvestMonth: 'Jan–Mar',           duration: '90–120 days' },
+  { id: 8, name: 'Sugarcane',nameHi:'गन्ना', icon: '🎍', season: 'Spring',        sowingMonth: 'Feb–Mar',           harvestMonth: 'Dec–Mar',           duration: '12–18 months' },
+  { id: 9, name: 'Maize',  nameHi: 'मक्का',  icon: '🌽', season: 'Kharif',        sowingMonth: 'Jun–Jul',           harvestMonth: 'Sep–Oct',           duration: '80–100 days' },
+  { id:10, name: 'Groundnut',nameHi:'मूंगफली',icon:'🥜', season: 'Kharif',        sowingMonth: 'Jun–Jul',           harvestMonth: 'Oct–Nov',           duration: '90–120 days' },
+];
 
-  const filteredCrops = CROPS.filter(c =>
-    !searchQuery ||
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    c.nameHi.includes(searchQuery)
+export default function CropCalendar({ navigation }) {
+  const { t } = useLanguage();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [crops,       setCrops]       = useState([]);
+  const [loading,     setLoading]     = useState(true);
+
+  useEffect(() => {
+    api.get('/weather/crops')
+      .then(({ data }) => setCrops(data.data?.length ? data.data : CROP_FALLBACK))
+      .catch(() => setCrops(CROP_FALLBACK))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const q = searchQuery.toLowerCase();
+  const filteredCrops = crops.filter(c =>
+    !q ||
+    c.name?.toLowerCase().includes(q) ||
+    (c.nameHi || '').includes(searchQuery)
   );
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -66,42 +100,42 @@ export default function CropCalendar({ navigation }) {
         ListHeaderComponent={
           <>
             {/* Banner */}
-            <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={styles.banner}>
+            <View style={styles.banner}>
               <Ionicons name="leaf" size={40} color={COLORS.primaryPale} />
-              <Text style={styles.bannerTitle}>Crop Calendar</Text>
-              <Text style={styles.bannerSub}>Personalized growing schedule for your crop</Text>
-            </LinearGradient>
+              <Text style={styles.bannerTitle}>{t('cropCalendar.bannerTitle')}</Text>
+              <Text style={styles.bannerSub}>{t('cropCalendar.bannerSub')}</Text>
+            </View>
 
             {/* Seasonal Guide */}
             <View style={styles.seasonSection}>
-              <Text style={styles.sectionTitle}>Current Season Guide</Text>
+              <Text style={styles.sectionTitle}>{t('cropCalendar.currentSeasonGuide')}</Text>
               <View style={styles.seasonCards}>
                 <View style={[styles.seasonCard, { backgroundColor: '#E8F5EC' }]}>
                   <Text style={styles.seasonEmoji}>🌧️</Text>
-                  <Text style={styles.seasonName}>Kharif</Text>
-                  <Text style={styles.seasonMonths}>Jun - Sep</Text>
-                  <Text style={styles.seasonCrops}>Rice, Cotton, Soybean</Text>
+                  <Text style={styles.seasonName}>{t('cropCalendar.kharif')}</Text>
+                  <Text style={styles.seasonMonths}>{t('cropCalendar.kharifMonths')}</Text>
+                  <Text style={styles.seasonCrops}>{t('cropCalendar.kharifCrops')}</Text>
                 </View>
                 <View style={[styles.seasonCard, { backgroundColor: '#FFF8E1' }]}>
                   <Text style={styles.seasonEmoji}>☀️</Text>
-                  <Text style={styles.seasonName}>Rabi</Text>
-                  <Text style={styles.seasonMonths}>Oct - Mar</Text>
-                  <Text style={styles.seasonCrops}>Wheat, Mustard, Gram</Text>
+                  <Text style={styles.seasonName}>{t('cropCalendar.rabi')}</Text>
+                  <Text style={styles.seasonMonths}>{t('cropCalendar.rabiMonths')}</Text>
+                  <Text style={styles.seasonCrops}>{t('cropCalendar.rabiCrops')}</Text>
                 </View>
                 <View style={[styles.seasonCard, { backgroundColor: '#E8F4FD' }]}>
                   <Text style={styles.seasonEmoji}>🌸</Text>
-                  <Text style={styles.seasonName}>Zaid</Text>
-                  <Text style={styles.seasonMonths}>Mar - Jun</Text>
-                  <Text style={styles.seasonCrops}>Watermelon, Moong</Text>
+                  <Text style={styles.seasonName}>{t('cropCalendar.zaid')}</Text>
+                  <Text style={styles.seasonMonths}>{t('cropCalendar.zaidMonths')}</Text>
+                  <Text style={styles.seasonCrops}>{t('cropCalendar.zaidCrops')}</Text>
                 </View>
               </View>
             </View>
 
-            <Text style={styles.sectionTitle}>Select Your Crop</Text>
+            <Text style={styles.sectionTitle}>{t('cropCalendar.selectYourCrop')}</Text>
           </>
         }
         renderItem={({ item }) => (
-          <CropCard crop={item} onPress={crop => navigation.navigate('CropDetail', { crop, cropName: crop.name })} />
+          <CropCard crop={item} t={t} onPress={crop => navigation.navigate('CropDetail', { crop, cropName: crop.name })} />
         )}
         ItemSeparatorComponent={() => <View style={{ height: 14 }} />}
       />

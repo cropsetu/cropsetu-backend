@@ -3,15 +3,16 @@ import {
   View, Text, TextInput, TouchableOpacity,
   StyleSheet, SafeAreaView, ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, TYPE, RADIUS, SHADOWS } from '../../constants/colors';
 import { useAuth } from '../../context/AuthContext';
+import { useLanguage } from '../../context/LanguageContext';
 
 const STEPS = { PHONE: 'phone', OTP: 'otp', NAME: 'name' };
 
 export default function LoginScreen() {
-  const { sendOtp, verifyOtp } = useAuth();
+  const { sendOtp, verifyOtp, updateUser } = useAuth();
+  const { t } = useLanguage();
 
   const [step,    setStep]    = useState(STEPS.PHONE);
   const [phone,   setPhone]   = useState('');
@@ -31,15 +32,17 @@ export default function LoginScreen() {
   // ── Step 1: send OTP ────────────────────────────────────────────────────────
   async function handleSendOtp() {
     if (!/^[6-9]\d{9}$/.test(phone)) {
-      Alert.alert('Invalid number', 'Enter a valid 10-digit Indian mobile number');
+      Alert.alert(t('login.invalidPhone'), t('login.invalidPhoneMsg'));
       return;
     }
     setLoading(true);
     try {
-      await sendOtp(phone);
+      const result = await sendOtp(phone);
       setStep(STEPS.OTP);
+      // Dev mode: auto-fill OTP when server returns it (MSG91 not configured)
+      if (result?.devOtp) setOtp(result.devOtp);
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.error?.message || 'Could not send OTP');
+      Alert.alert(t('login.error'), err.response?.data?.error?.message || t('login.otpError'));
     } finally {
       setLoading(false);
     }
@@ -48,7 +51,7 @@ export default function LoginScreen() {
   // ── Step 2: verify OTP ──────────────────────────────────────────────────────
   async function handleVerifyOtp() {
     if (otp.length !== 6) {
-      Alert.alert('Invalid OTP', 'Enter the 6-digit code');
+      Alert.alert(t('login.invalidOtp'), t('login.invalidOtpMsg'));
       return;
     }
     setLoading(true);
@@ -60,7 +63,7 @@ export default function LoginScreen() {
       }
       // If existing user → AuthContext sets user → AppNavigator switches to tabs
     } catch (err) {
-      Alert.alert('Error', err.response?.data?.error?.message || 'OTP verification failed');
+      Alert.alert(t('login.error'), err.response?.data?.error?.message || t('login.verifyError'));
     } finally {
       setLoading(false);
     }
@@ -69,7 +72,7 @@ export default function LoginScreen() {
   // ── Step 3: save name (new users only) ────────────────────────────────────
   async function handleSaveName() {
     if (name.trim().length < 2) {
-      Alert.alert('Required', 'Please enter your name');
+      Alert.alert(t('login.nameRequired'), t('login.nameRequiredMsg'));
       return;
     }
     setLoading(true);
@@ -77,9 +80,7 @@ export default function LoginScreen() {
       // User is already logged in — just update the name
       const { default: api } = await import('../../services/api');
       await api.put('/users/me', { name: name.trim() });
-      // Trigger re-fetch by touching auth context
-      const { data } = await api.get('/users/me');
-      // AuthContext.updateUser will be triggered by the parent re-render
+      updateUser({ name: name.trim() });
     } catch {
       // Non-critical — proceed anyway
     } finally {
@@ -89,7 +90,7 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={s.safe}>
-      <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={s.gradient}>
+      <View style={[s.gradient, { backgroundColor: COLORS.primary }]}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={s.inner}>
 
           {/* Logo area */}
@@ -98,20 +99,20 @@ export default function LoginScreen() {
               <Text style={s.logoEmoji}>🌾</Text>
             </View>
             <Text style={s.appName}>FarmEasy</Text>
-            <Text style={s.tagline}>Kisan Ki Awaaz</Text>
+            <Text style={s.tagline}>{t('login.tagline')}</Text>
           </View>
 
           {/* Card */}
           <View style={s.card}>
             {step === STEPS.PHONE && (
               <>
-                <Text style={s.cardTitle}>Enter your mobile number</Text>
-                <Text style={s.cardSub}>We'll send a 6-digit OTP to verify</Text>
+                <Text style={s.cardTitle}>{t('login.enterPhone')}</Text>
+                <Text style={s.cardSub}>{t('login.otpWillSend')}</Text>
                 <View style={s.inputRow}>
                   <View style={s.countryCode}><Text style={s.countryTxt}>+91</Text></View>
                   <TextInput
                     style={s.input}
-                    placeholder="10-digit mobile number"
+                    placeholder={t('login.phonePlaceholder')}
                     placeholderTextColor={COLORS.textLight}
                     keyboardType="phone-pad"
                     maxLength={10}
@@ -122,7 +123,7 @@ export default function LoginScreen() {
                 <TouchableOpacity style={s.btn} onPress={handleSendOtp} disabled={loading}>
                   {loading
                     ? <ActivityIndicator color="#fff" />
-                    : <Text style={s.btnTxt}>Send OTP</Text>
+                    : <Text style={s.btnTxt}>{t('login.sendOtp')}</Text>
                   }
                 </TouchableOpacity>
               </>
@@ -133,8 +134,8 @@ export default function LoginScreen() {
                 <TouchableOpacity onPress={() => setStep(STEPS.PHONE)} style={s.backBtn}>
                   <Ionicons name="arrow-back" size={20} color={COLORS.primary} />
                 </TouchableOpacity>
-                <Text style={s.cardTitle}>Enter OTP</Text>
-                <Text style={s.cardSub}>Sent to +91 {phone}</Text>
+                <Text style={s.cardTitle}>{t('login.enterOtp')}</Text>
+                <Text style={s.cardSub}>{t('login.otpSentTo', { phone })}</Text>
                 <TextInput
                   ref={otpRef}
                   style={s.otpInput}
@@ -151,22 +152,22 @@ export default function LoginScreen() {
                 <TouchableOpacity style={s.btn} onPress={handleVerifyOtp} disabled={loading}>
                   {loading
                     ? <ActivityIndicator color="#fff" />
-                    : <Text style={s.btnTxt}>Verify & Login</Text>
+                    : <Text style={s.btnTxt}>{t('login.verifyLogin')}</Text>
                   }
                 </TouchableOpacity>
                 <TouchableOpacity onPress={handleSendOtp} style={s.resendBtn}>
-                  <Text style={s.resendTxt}>Resend OTP</Text>
+                  <Text style={s.resendTxt}>{t('login.resendOtp')}</Text>
                 </TouchableOpacity>
               </>
             )}
 
             {step === STEPS.NAME && (
               <>
-                <Text style={s.cardTitle}>Welcome to FarmEasy!</Text>
-                <Text style={s.cardSub}>What should we call you?</Text>
+                <Text style={s.cardTitle}>{t('login.welcome')}</Text>
+                <Text style={s.cardSub}>{t('login.yourName')}</Text>
                 <TextInput
                   style={s.input}
-                  placeholder="Your name"
+                  placeholder={t('login.namePlaceholder')}
                   placeholderTextColor={COLORS.textLight}
                   value={name}
                   onChangeText={setName}
@@ -175,16 +176,16 @@ export default function LoginScreen() {
                 <TouchableOpacity style={s.btn} onPress={handleSaveName} disabled={loading}>
                   {loading
                     ? <ActivityIndicator color="#fff" />
-                    : <Text style={s.btnTxt}>Get Started →</Text>
+                    : <Text style={s.btnTxt}>{t('login.getStarted')}</Text>
                   }
                 </TouchableOpacity>
               </>
             )}
           </View>
 
-          <Text style={s.footer}>By continuing you agree to our Terms of Service</Text>
+          <Text style={s.footer}>{t('login.termsNote')}</Text>
         </KeyboardAvoidingView>
-      </LinearGradient>
+      </View>
     </SafeAreaView>
   );
 }

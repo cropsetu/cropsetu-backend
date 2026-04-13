@@ -6,28 +6,28 @@ import { useRef, useEffect } from 'react';
 import {
   View, StyleSheet, Animated, PanResponder, Dimensions,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 
 const { height: H } = Dimensions.get('window');
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 export const D = {
-  bg:       '#F0F4FF',
+  bg:       '#EEF8F4',
   surface:  '#FFFFFF',
-  border:   'rgba(0,0,0,0.08)',
-  text:     '#1E293B',
-  textDim:  '#64748B',
-  textFaint:'#94A3B8',
+  border:   'rgba(0,0,0,0.06)',
+  text:     '#1A1A1A',
+  textDim:  '#555555',
+  textFaint:'#999999',
 
   // per-tab accents
-  green:   '#059669',
-  amber:   '#F97316',
-  cyan:    '#0284C7',
-  blue:    '#3B82F6',
-  indigo:  '#6366F1',
-  purple:  '#9333EA',
-  gold:    '#F59E0B',
-  red:     '#EF4444',
+  green:   '#2D9162',
+  greenLight: '#38A874',
+  amber:   '#E67E22',
+  cyan:    '#0288D1',
+  blue:    '#1976D2',
+  indigo:  '#3949AB',
+  purple:  '#7B1FA2',
+  gold:    '#F9A825',
+  red:     '#E53935',
 };
 
 // ── FloatingParticle ──────────────────────────────────────────────────────────
@@ -168,9 +168,9 @@ export function AnimatedHeader({ scrollY, height = H * 0.28, colors, children, s
         },
       ]}
     >
-      <LinearGradient colors={colors || [D.bg, '#0A1628']} style={{ flex: 1 }}>
+      <View style={[{ flex: 1 }, colors ? { backgroundColor: colors[0] } : { backgroundColor: D.bg }]}>
         {children}
-      </LinearGradient>
+      </View>
     </Animated.View>
   );
 }

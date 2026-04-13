@@ -5,7 +5,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SHADOWS } from '../../constants/colors';
-import { MOCK_MESSAGES } from '../../constants/mockData';
+import { useLanguage } from '../../context/LanguageContext';
 
 function MessageBubble({ message }) {
   const isMe = message.senderId === 'me';
@@ -36,7 +36,8 @@ function QuickReply({ text, onPress }) {
 
 export default function ChatScreen({ route }) {
   const { sellerName } = route.params;
-  const [messages, setMessages] = useState(MOCK_MESSAGES);
+  const { t } = useLanguage();
+  const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const flatListRef = useRef(null);
 
@@ -96,7 +97,7 @@ export default function ChatScreen({ route }) {
           <Text style={styles.chatName}>{sellerName}</Text>
           <View style={styles.onlineRow}>
             <View style={styles.onlineDot} />
-            <Text style={styles.onlineText}>Online</Text>
+            <Text style={styles.onlineText}>{t('chat.online')}</Text>
           </View>
         </View>
       </View>
@@ -133,7 +134,7 @@ export default function ChatScreen({ route }) {
           </TouchableOpacity>
           <TextInput
             style={styles.messageInput}
-            placeholder="Type your message..."
+            placeholder={t('chat.typePlaceholder')}
             placeholderTextColor={COLORS.textLight}
             value={inputText}
             onChangeText={setInputText}

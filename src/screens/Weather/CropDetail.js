@@ -3,15 +3,15 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, SafeAreaView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SHADOWS } from '../../constants/colors';
+import { useLanguage } from '../../context/LanguageContext';
 
 const STAGE_COLORS = [
   '#1B4332', '#2D6A4F', '#40916C', '#52B788', '#74C69D',
   '#95D5B2', '#B7E4C7', '#D8F3DC',
 ];
 
-function StageCard({ stage, index, total, isActive }) {
+function StageCard({ stage, index, total, isActive, t }) {
   const color = STAGE_COLORS[index % STAGE_COLORS.length];
   const progressPct = ((index + 1) / total) * 100;
 
@@ -33,13 +33,13 @@ function StageCard({ stage, index, total, isActive }) {
             <Text style={styles.stageNameHi}>{stage.nameHi}</Text>
           </View>
           <View style={[styles.stageDayBadge, { backgroundColor: color }]}>
-            <Text style={styles.stageDayText}>Day {stage.day}</Text>
+            <Text style={styles.stageDayText}>{t('cropDetail.dayLabel')} {stage.day}</Text>
           </View>
         </View>
 
         <View style={styles.stageDurationRow}>
           <Ionicons name="time" size={14} color={COLORS.textLight} />
-          <Text style={styles.stageDuration}>{stage.duration} days duration</Text>
+          <Text style={styles.stageDuration}>{stage.duration} {t('cropDetail.daysDuration')}</Text>
         </View>
 
         {/* Tip */}
@@ -52,24 +52,27 @@ function StageCard({ stage, index, total, isActive }) {
         <View style={styles.stageProgressBar}>
           <View style={[styles.stageProgressFill, { width: `${progressPct}%`, backgroundColor: color }]} />
         </View>
-        <Text style={styles.stageProgressLabel}>{Math.round(progressPct)}% of crop cycle</Text>
+        <Text style={styles.stageProgressLabel}>{Math.round(progressPct)}{t('cropDetail.percentCropCycle')}</Text>
       </View>
     </View>
   );
 }
 
 export default function CropDetail({ route }) {
+  const { t } = useLanguage();
   const { crop } = route.params;
   const [activeStageIndex, setActiveStageIndex] = useState(1);
 
-  const totalDays = crop.stages[crop.stages.length - 1].day + crop.stages[crop.stages.length - 1].duration;
+  const hasStages = Array.isArray(crop.stages) && crop.stages.length > 0;
+  const lastStage = hasStages ? crop.stages[crop.stages.length - 1] : null;
+  const totalDays = lastStage ? (lastStage.day || 0) + (lastStage.duration || 0) : 0;
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView showsVerticalScrollIndicator={false}>
 
         {/* Crop Header */}
-        <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={styles.cropHeader}>
+        <View style={styles.cropHeader}>
           <Text style={styles.cropIcon}>{crop.icon}</Text>
           <Text style={styles.cropName}>{crop.name}</Text>
           <Text style={styles.cropNameHi}>{crop.nameHi}</Text>
@@ -77,46 +80,47 @@ export default function CropDetail({ route }) {
             <Ionicons name="calendar" size={14} color={COLORS.textWhite} />
             <Text style={styles.seasonText}>{crop.season}</Text>
           </View>
-        </LinearGradient>
+        </View>
 
         {/* Crop Summary Cards */}
         <View style={styles.summaryGrid}>
           <View style={styles.summaryCard}>
             <Ionicons name="calendar" size={20} color={COLORS.primary} />
             <Text style={styles.summaryValue}>{crop.sowingMonth}</Text>
-            <Text style={styles.summaryLabel}>Best Sowing Time</Text>
+            <Text style={styles.summaryLabel}>{t('cropDetail.bestSowingTime')}</Text>
           </View>
           <View style={styles.summaryCard}>
             <Ionicons name="time" size={20} color={COLORS.accent} />
             <Text style={styles.summaryValue}>{crop.duration}</Text>
-            <Text style={styles.summaryLabel}>Total Duration</Text>
+            <Text style={styles.summaryLabel}>{t('cropDetail.totalDuration')}</Text>
           </View>
           <View style={styles.summaryCard}>
             <Ionicons name="cut" size={20} color={COLORS.success} />
             <Text style={styles.summaryValue}>{crop.harvestMonth}</Text>
-            <Text style={styles.summaryLabel}>Harvest Time</Text>
+            <Text style={styles.summaryLabel}>{t('cropDetail.harvestTime')}</Text>
           </View>
           <View style={styles.summaryCard}>
             <Ionicons name="water" size={20} color={COLORS.info} />
-            <Text style={styles.summaryValue} numberOfLines={2}>{crop.waterNeeded.split('(')[0]}</Text>
-            <Text style={styles.summaryLabel}>Water Needed</Text>
+            <Text style={styles.summaryValue} numberOfLines={2}>{crop.waterNeeded ? crop.waterNeeded.split('(')[0] : t('cropDetail.varies')}</Text>
+            <Text style={styles.summaryLabel}>{t('cropDetail.waterNeeded')}</Text>
           </View>
           <View style={styles.summaryCard}>
             <Ionicons name="thermometer" size={20} color={COLORS.error} />
             <Text style={styles.summaryValue}>{crop.idealTemp}</Text>
-            <Text style={styles.summaryLabel}>Ideal Temperature</Text>
+            <Text style={styles.summaryLabel}>{t('cropDetail.idealTemperature')}</Text>
           </View>
           <View style={styles.summaryCard}>
             <Ionicons name="layers" size={20} color={COLORS.gold} />
             <Text style={styles.summaryValue} numberOfLines={2}>{crop.soilType}</Text>
-            <Text style={styles.summaryLabel}>Best Soil</Text>
+            <Text style={styles.summaryLabel}>{t('cropDetail.bestSoil')}</Text>
           </View>
         </View>
 
         {/* Visual Timeline */}
+        {hasStages && (
         <View style={styles.timelineSection}>
-          <Text style={styles.sectionTitle}>Crop Growth Timeline</Text>
-          <Text style={styles.sectionSub}>{crop.stages.length} stages · {totalDays} total days</Text>
+          <Text style={styles.sectionTitle}>{t('cropDetail.cropGrowthTimeline')}</Text>
+          <Text style={styles.sectionSub}>{t('cropDetail.stagesSummary', { stages: crop.stages.length, totalDays })}</Text>
 
           {/* Stage selector mini-bar */}
           <View style={styles.stageSelector}>
@@ -128,7 +132,7 @@ export default function CropDetail({ route }) {
                   onPress={() => setActiveStageIndex(i)}
                 >
                   <Text style={[styles.stageSelectorText, activeStageIndex === i && styles.stageSelectorTextActive]}>
-                    {i + 1}. {stage.name.split(' ')[0]}
+                    {i + 1}. {stage.name?.split(' ')[0] || stage.name}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -137,7 +141,7 @@ export default function CropDetail({ route }) {
 
           {/* Highlighted stage detail */}
           <View style={styles.activeStageDetail}>
-            <LinearGradient colors={[COLORS.primary + '20', COLORS.primaryPale]} style={styles.activeStageGradient}>
+            <View style={styles.activeStageGradient}>
               <View style={styles.activeStageHeader}>
                 <Text style={styles.activeStageName}>{crop.stages[activeStageIndex].name}</Text>
                 <Text style={styles.activeStageHi}>{crop.stages[activeStageIndex].nameHi}</Text>
@@ -145,12 +149,12 @@ export default function CropDetail({ route }) {
               <View style={styles.activeStageStats}>
                 <View style={styles.activeStatItem}>
                   <Ionicons name="play" size={16} color={COLORS.primary} />
-                  <Text style={styles.activeStatLabel}>Starts Day</Text>
+                  <Text style={styles.activeStatLabel}>{t('cropDetail.startsDay')}</Text>
                   <Text style={styles.activeStatValue}>{crop.stages[activeStageIndex].day}</Text>
                 </View>
                 <View style={styles.activeStatItem}>
                   <Ionicons name="time" size={16} color={COLORS.accent} />
-                  <Text style={styles.activeStatLabel}>Duration</Text>
+                  <Text style={styles.activeStatLabel}>{t('cropDetail.totalDuration')}</Text>
                   <Text style={styles.activeStatValue}>{crop.stages[activeStageIndex].duration}d</Text>
                 </View>
               </View>
@@ -158,7 +162,7 @@ export default function CropDetail({ route }) {
                 <Ionicons name="bulb" size={18} color={COLORS.gold} />
                 <Text style={styles.tipBoxText}>{crop.stages[activeStageIndex].tip}</Text>
               </View>
-            </LinearGradient>
+            </View>
           </View>
 
           {/* Full timeline */}
@@ -170,10 +174,12 @@ export default function CropDetail({ route }) {
                 index={i}
                 total={crop.stages.length}
                 isActive={activeStageIndex === i}
+                t={t}
               />
             ))}
           </View>
         </View>
+        )}
 
         <View style={{ height: 30 }} />
       </ScrollView>

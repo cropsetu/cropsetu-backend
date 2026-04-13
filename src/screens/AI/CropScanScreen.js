@@ -313,9 +313,17 @@ export default function CropScanScreen({ navigation }) {
       timers.forEach(timer => clearTimeout(timer));
       console.error('[Scan] API error:', err?.message,
         'status=', err?.response?.status,
+        'sessionExpired=', err?.sessionExpired,
         'data=', JSON.stringify(err?.response?.data)?.slice(0, 300));
-      const msg = err.response?.status === 429
+      const status = err?.response?.status;
+      const msg = err?.sessionExpired
+        ? 'Session expired. Please log out and log back in.'
+        : status === 429
         ? t('cropScan.aiBusy')
+        : status === 503
+        ? 'AI service is warming up. Please wait 30 seconds and try again.'
+        : status === 401
+        ? 'Session expired. Please log out and log back in.'
         : t('cropScan.scanFailed');
       setAnalysisError(msg);
     }

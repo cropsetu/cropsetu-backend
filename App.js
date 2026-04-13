@@ -2,9 +2,11 @@ import 'react-native-gesture-handler';
 import React from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import AppNavigator from './src/navigation/AppNavigator';
 import { LanguageProvider } from './src/context/LanguageContext';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
+import { FarmProvider } from './src/context/FarmContext';
 import LoginScreen from './src/screens/Auth/LoginScreen';
 import { COLORS } from './src/constants/colors';
 
@@ -24,11 +26,15 @@ function RootNavigator() {
 
 export default function App() {
   return (
-    <LanguageProvider>
-      <AuthProvider>
-        <StatusBar style="light" />
-        <RootNavigator />
-      </AuthProvider>
-    </LanguageProvider>
+    <SafeAreaProvider>
+      <LanguageProvider>
+        <AuthProvider>
+          <FarmProvider>
+            <StatusBar style="light" />
+            <RootNavigator />
+          </FarmProvider>
+        </AuthProvider>
+      </LanguageProvider>
+    </SafeAreaProvider>
   );
 }

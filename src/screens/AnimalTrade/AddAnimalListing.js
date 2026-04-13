@@ -120,7 +120,6 @@ export default function AddAnimalListing({ navigation }) {
       }
 
       await api.post('/animals', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 90000, // 90s — Cloudinary upload can take up to 55s
       });
 

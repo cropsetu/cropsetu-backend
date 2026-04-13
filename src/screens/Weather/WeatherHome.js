@@ -1,727 +1,1157 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+/**
+ * WeatherHome — FarmEasy Field Monitor
+ *
+ * Sections:
+ *  1. Hero card  — gradient bg + ImageBackground field photo + temp + sun arc
+ *  2. IMD alert banner  (if alerts exist)
+ *  3. Farming advisories  (horizontal scroll)
+ *  4. Hourly forecast     (horizontal scroll)
+ *  5. 7-day forecast      (vertical list)
+ *  6. Soil dashboard      (temp depths + moisture bars + ET)
+ *  7. Sunrise / Sunset arc
+ *
+ * Data: backend /api/v1/weather (Open-Meteo + IMD)
+ * Offline: AsyncStorage cache → rendered immediately on open
+ * Temperature: Celsius (°C) — Indian standard
+ */
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity,
-  StatusBar, ActivityIndicator, Dimensions, Animated, PanResponder,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  ActivityIndicator, Dimensions, StatusBar, Platform,
+  ImageBackground, Animated,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
-import { SHADOWS } from '../../constants/colors';
+import { Ionicons } from '@expo/vector-icons';
+import { fetchWeatherForCurrentLocation, formatLastUpdated } from '../../services/weatherApi';
 import { useLanguage } from '../../context/LanguageContext';
 
-const { height: H } = Dimensions.get('window');
-const HERO_H = H * 0.62;
-const CARD_W = 84;
-const CARD_GAP = 12;
-const SNAP_W = CARD_W + CARD_GAP;
+const { width: W, height: H } = Dimensions.get('window');
+const CARD_W = (W - 32 - 10) / 2;
 
-// ── WMO weather code helpers ───────────────────────────────────────────────────
-function wmoIcon(code) {
-  if (code === 0)   return 'sunny';
-  if (code <= 2)    return 'partly-sunny';
-  if (code <= 3)    return 'cloudy';
-  if (code <= 48)   return 'partly-sunny';
-  if (code <= 65)   return 'rainy';
-  if (code <= 77)   return 'snow';
-  if (code <= 82)   return 'rainy';
-  if (code >= 95)   return 'thunderstorm';
-  return 'partly-sunny';
+// ── Design tokens ─────────────────────────────────────────────────────────────
+const C = {
+  green:      '#1B5E20',
+  greenLight: '#2D7D46',
+  amber:      '#F57F17',
+  amberLight: '#FFB300',
+  bg:         '#F0F4F0',
+  card:       '#FFFFFF',
+  text:       '#1A1A1A',
+  sub:        '#6B7280',
+  border:     '#EBEBEB',
+};
+
+// ── Dynamic hero gradient by weather code + hour ──────────────────────────────
+function heroGradient(weatherCode, hour) {
+  const isNight = hour < 6 || hour >= 19;
+  if (weatherCode >= 95) return ['#1A237E', '#37474F'];              // storm — dark blue-grey
+  if (weatherCode >= 61) return ['#263238', '#37474F'];              // rain  — dark grey-blue
+  if (weatherCode >= 3)  return isNight ? ['#1C1C2E', '#2C3E50'] : ['#546E7A', '#78909C']; // cloudy
+  // Clear
+  if (isNight) return ['#0D1B2A', '#1B2A4A'];                        // clear night — deep blue
+  if (hour < 8 || hour >= 17) return ['#E65100', '#F57F17'];         // sunrise/sunset — amber
+  return ['#1565C0', '#1976D2'];                                     // clear day — sky blue
 }
 
-function wmoCondition(code) {
-  if (code === 0)   return 'Clear Sky';
-  if (code <= 2)    return 'Partly Cloudy';
-  if (code <= 3)    return 'Overcast';
-  if (code <= 48)   return 'Foggy';
-  if (code <= 55)   return 'Light Drizzle';
-  if (code <= 65)   return 'Rainy';
-  if (code <= 77)   return 'Snowy';
-  if (code <= 82)   return 'Rain Showers';
-  if (code >= 95)   return 'Thunderstorm';
-  return 'Partly Cloudy';
+// ── Weather image selector ────────────────────────────────────────────────────
+// Each image maps to a WMO condition range + time of day.
+// Images live in assets/weather/ — see naming guide in project docs.
+const WEATHER_IMAGES = {
+  rain_day:      require('../../../assets/weather/wx_rain_day.jpg'),
+  rain_night:    require('../../../assets/weather/wx_rain_night.jpg'),
+  thunderstorm:  require('../../../assets/weather/wx_thunderstorm.jpg'),
+  clear_night:   require('../../../assets/weather/wx_clear_night.jpg'),
+  clear_morning: require('../../../assets/weather/wx_clear_morning.jpg'),
+  clear_day:     require('../../../assets/weather/wx_clear_day.jpg'),
+  sunrise:       require('../../../assets/weather/wx_sunrise.jpg'),
+  cloudy:        require('../../../assets/weather/wx_cloudy.jpg'),
+};
+
+function getWeatherImage(weatherCode, hour) {
+  const isNight = hour < 6 || hour >= 19;
+
+  if (weatherCode >= 95) return WEATHER_IMAGES.thunderstorm;             // WMO 95-99 — thunder/lightning
+  if (weatherCode >= 51) return isNight                                   // WMO 51-82 — rain
+    ? WEATHER_IMAGES.rain_night
+    : WEATHER_IMAGES.rain_day;
+  if (weatherCode >= 3)  return WEATHER_IMAGES.cloudy;                   // WMO 3-48  — overcast/fog
+
+  // WMO 0-2 — clear sky, split by hour
+  if (isNight)                        return WEATHER_IMAGES.clear_night;  // 19:00 – 05:59
+  if (hour >= 5  && hour < 8)         return WEATHER_IMAGES.sunrise;      // early golden light
+  if (hour >= 17 && hour < 20)        return WEATHER_IMAGES.sunrise;      // evening golden light
+  if (hour >= 8  && hour < 10)        return WEATHER_IMAGES.clear_morning;// misty morning
+  return WEATHER_IMAGES.clear_day;                                        // 10:00 – 16:59
 }
 
-function getFarmingTip(code, humidity, temp) {
-  if (code >= 95) return 'Thunderstorm expected — stay indoors, postpone all field work.';
-  if (code >= 61) return 'Rain likely — avoid pesticide/fertilizer spraying. Good time for sowing.';
-  if (humidity > 80) return 'High humidity — watch for fungal diseases. Ensure good field drainage.';
-  if (temp > 38)  return 'Heat wave — irrigate early morning or evening. Protect young seedlings.';
-  if (temp < 15)  return 'Cool weather — ideal for rabi crops. Monitor for frost in low-lying fields.';
-  return 'Good farming conditions. Ideal for field operations and crop inspection.';
-}
+// ── Advisory color ────────────────────────────────────────────────────────────
+const ADVISORY_COLORS = {
+  green:  { bg: 'rgba(27,94,32,0.10)',  border: '#1B5E20', icon: '#1B5E20' },
+  orange: { bg: 'rgba(245,127,23,0.10)', border: '#F57F17', icon: '#F57F17' },
+  red:    { bg: 'rgba(183,28,28,0.10)', border: '#B71C1C', icon: '#B71C1C' },
+};
 
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// ── Alert colours ─────────────────────────────────────────────────────────────
+const ALERT_COLORS = {
+  red:    { bg: 'rgba(220,38,38,0.07)',  border: '#DC2626', icon: '#DC2626', badge: '#DC2626' },
+  orange: { bg: 'rgba(234,88,12,0.07)',  border: '#EA580C', icon: '#EA580C', badge: '#EA580C' },
+  blue:   { bg: 'rgba(59,130,246,0.07)', border: '#3B82F6', icon: '#3B82F6', badge: '#3B82F6' },
+  yellow: { bg: 'rgba(202,138,4,0.07)',  border: '#CA8A04', icon: '#CA8A04', badge: '#CA8A04' },
+};
 
-function formatHour(isoString) {
-  const h = new Date(isoString).getHours();
-  if (h === 0)  return '12 AM';
-  if (h === 12) return '12 PM';
-  return h < 12 ? `${h} AM` : `${h - 12} PM`;
-}
+// ── Generate alerts from 7-day forecast + IMD ─────────────────────────────────
+function generateWeatherAlerts(daily, imdAlerts, lang) {
+  const list = [];
+  const hi = lang === 'hi';
 
-function buildWeatherData(omData, cityName, stateName) {
-  const c      = omData.current;
-  const daily  = omData.daily;
-  const hourly = omData.hourly;
+  for (const day of (daily || [])) {
+    // Thunderstorm (WMO 95–99)
+    if (day.weatherCode >= 95) {
+      list.push({
+        color: 'red', severity: 'HIGH',
+        icon:  'thunderstorm-outline',
+        title: hi ? 'तूफान चेतावनी' : 'Thunderstorm Warning',
+        day:   day.dateLabel,
+        desc:  hi
+          ? `${day.dateLabel} को बिजली के साथ भारी तूफान की संभावना है।`
+          : `Severe thunderstorm with lightning likely on ${day.dateLabel}.`,
+      });
+    }
+    // Heavy rain (WMO 63–82) or rainfall ≥ 15 mm
+    else if (day.weatherCode >= 63 || day.precipitationSum >= 15) {
+      list.push({
+        color: 'orange', severity: 'MED',
+        icon:  'rainy-outline',
+        title: hi ? 'भारी बारिश चेतावनी' : 'Heavy Rain Warning',
+        day:   day.dateLabel,
+        desc:  hi
+          ? `${day.dateLabel} को ${day.precipitationSum} mm वर्षा अपेक्षित।`
+          : `${day.precipitationSum} mm rainfall expected on ${day.dateLabel}.`,
+      });
+    }
+    // Rain likely (≥ 70 % probability, WMO 51+)
+    else if (day.precipitationProbability >= 70 && day.weatherCode >= 51) {
+      list.push({
+        color: 'blue', severity: 'LOW',
+        icon:  'water-outline',
+        title: hi ? 'बारिश की संभावना' : 'Rain Expected',
+        day:   day.dateLabel,
+        desc:  hi
+          ? `${day.dateLabel} को ${day.precipitationProbability}% बारिश की संभावना।`
+          : `${day.precipitationProbability}% chance of rain on ${day.dateLabel}.`,
+      });
+    }
 
-  const nowMs = Date.now();
-  const hourlyItems = [];
-  for (let i = 0; i < hourly.time.length && hourlyItems.length < 24; i++) {
-    if (new Date(hourly.time[i]).getTime() < nowMs) continue;
-    hourlyItems.push({
-      time: formatHour(hourly.time[i]),
-      icon: wmoIcon(hourly.weather_code[i]),
-      temp: Math.round(hourly.temperature_2m[i]),
-      rain: hourly.precipitation_probability[i] || 0,
+    // Strong wind ≥ 50 km/h
+    if (day.windSpeedMax >= 50) {
+      list.push({
+        color: day.windSpeedMax >= 70 ? 'red' : 'orange',
+        severity: day.windSpeedMax >= 70 ? 'HIGH' : 'MED',
+        icon:  'navigate-outline',
+        title: hi ? 'तेज़ हवा चेतावनी' : 'Strong Wind Warning',
+        day:   day.dateLabel,
+        desc:  hi
+          ? `${day.dateLabel} को ${day.windSpeedMax} km/h तेज़ हवा।`
+          : `Wind gusts up to ${day.windSpeedMax} km/h on ${day.dateLabel}.`,
+      });
+    }
+
+    // Extreme UV ≥ 8
+    if (day.uvIndexMax >= 8) {
+      list.push({
+        color: 'yellow', severity: day.uvIndexMax >= 11 ? 'HIGH' : 'MED',
+        icon:  'sunny-outline',
+        title: hi ? 'उच्च UV स्तर' : 'High UV Index',
+        day:   day.dateLabel,
+        desc:  hi
+          ? `${day.dateLabel} को UV इंडेक्स ${day.uvIndexMax} — धूप में सावधान रहें।`
+          : `UV Index ${day.uvIndexMax} on ${day.dateLabel}. Avoid midday sun.`,
+      });
+    }
+  }
+
+  // Append IMD alerts (already fetched by backend)
+  for (const a of (imdAlerts || [])) {
+    list.push({
+      color:    a.severity === 'high' ? 'red' : a.severity === 'medium' ? 'orange' : 'yellow',
+      severity: a.severity === 'high' ? 'HIGH' : a.severity === 'medium' ? 'MED' : 'LOW',
+      icon:     'warning-outline',
+      title:    a.title,
+      day:      'IMD',
+      desc:     a.description,
     });
   }
 
-  const weekly = daily.time.slice(0, 7).map((date, i) => ({
-    day:  DAY_NAMES[new Date(date).getDay()],
-    icon: wmoIcon(daily.weather_code[i]),
-    rain: daily.precipitation_probability_max?.[i] || 0,
-    low:  Math.round(daily.temperature_2m_min[i]),
-    high: Math.round(daily.temperature_2m_max[i]),
-  }));
-
-  return {
-    city:  cityName,
-    state: stateName,
-    current: {
-      temp:       Math.round(c.temperature_2m),
-      feelsLike:  Math.round(c.apparent_temperature),
-      humidity:   c.relative_humidity_2m,
-      windSpeed:  Math.round(c.wind_speed_10m),
-      rainChance: daily.precipitation_probability_max?.[0] || 0,
-      icon:       wmoIcon(c.weather_code),
-      condition:  wmoCondition(c.weather_code),
-      visibility: 10,
-      uvIndex:    Math.round(c.uv_index ?? 0),
-      pressure:   Math.round(c.surface_pressure ?? 1013),
-    },
-    hourly: hourlyItems,
-    weekly,
-    alerts: [],
-    farmingTip: getFarmingTip(c.weather_code, c.relative_humidity_2m, c.temperature_2m),
-  };
+  return list.slice(0, 3);
 }
 
-const ICON_MAP = {
-  'sunny': 'sunny', 'partly-sunny': 'partly-sunny',
-  'cloudy': 'cloud', 'rainy': 'rainy',
-  'thunderstorm': 'thunderstorm', 'snow': 'snow',
-};
+// ── Severity color for IMD alerts ─────────────────────────────────────────────
+const SEVERITY_BG = { high: '#B71C1C', medium: '#E65100', low: '#F57F17' };
 
-// ── Floating Ambient Particle ─────────────────────────────────────────────────
-function FloatingParticle({ icon, size, color, particleStyle, delay, duration }) {
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.delay(delay),
-        Animated.timing(anim, { toValue: 1, duration, useNativeDriver: true }),
-        Animated.timing(anim, { toValue: 0, duration, useNativeDriver: true }),
-      ])
-    ).start();
-  }, []);
-
-  const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, -20] });
-  const opacity    = anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.2, 0.6, 0.2] });
-  const scale      = anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.85, 1.1, 0.85] });
-
-  return (
-    <Animated.View
-      pointerEvents="none"
-      style={[styles.particle, particleStyle, { opacity, transform: [{ translateY }, { scale }] }]}
-    >
-      <Ionicons name={icon} size={size} color={color || 'rgba(255,255,255,0.5)'} />
-    </Animated.View>
-  );
+// ── Soil moisture bar color ───────────────────────────────────────────────────
+function moistureColor(pct) {
+  if (pct == null) return '#9CA3AF';
+  if (pct < 20) return '#EF4444';   // dry — red
+  if (pct < 50) return '#F59E0B';   // low — amber
+  if (pct < 75) return '#22C55E';   // good — green
+  return '#3B82F6';                  // wet — blue
 }
 
-// ── 3D Tilt Card ──────────────────────────────────────────────────────────────
-function TiltCard({ children, style, innerStyle }) {
-  const tilt  = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
-  const scale = useRef(new Animated.Value(1)).current;
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        Animated.spring(scale, { toValue: 1.03, useNativeDriver: true, tension: 120, friction: 8 }).start();
-      },
-      onPanResponderMove: (_, gs) => {
-        tilt.setValue({
-          x: Math.max(-12, Math.min(12, gs.dx / 6)),
-          y: Math.max(-12, Math.min(12, gs.dy / 6)),
-        });
-      },
-      onPanResponderRelease: () => {
-        Animated.parallel([
-          Animated.spring(tilt, { toValue: { x: 0, y: 0 }, useNativeDriver: true, tension: 100, friction: 7 }),
-          Animated.spring(scale, { toValue: 1, useNativeDriver: true, tension: 120, friction: 8 }),
-        ]).start();
-      },
-    })
-  ).current;
-
-  const rotateX = tilt.y.interpolate({ inputRange: [-12, 12], outputRange: ['8deg', '-8deg'] });
-  const rotateY = tilt.x.interpolate({ inputRange: [-12, 12], outputRange: ['-8deg', '8deg'] });
-
-  return (
-    <Animated.View style={[style, { transform: [{ scale }] }]} {...panResponder.panHandlers}>
-      <Animated.View style={[innerStyle, { transform: [{ perspective: 600 }, { rotateX }, { rotateY }] }]}>
-        {children}
-      </Animated.View>
-    </Animated.View>
-  );
+// ── Sun arc: compute progress 0→1 ────────────────────────────────────────────
+function sunProgress(sunriseIso, sunsetIso) {
+  const now     = Date.now();
+  const sunrise = new Date(sunriseIso).getTime();
+  const sunset  = new Date(sunsetIso).getTime();
+  if (now <= sunrise) return 0;
+  if (now >= sunset)  return 1;
+  return (now - sunrise) / (sunset - sunrise);
 }
 
-// ── 3D Hourly Card ────────────────────────────────────────────────────────────
-function HourlyCard3D({ item, index, scrollX }) {
-  const inputRange = [
-    (index - 1) * SNAP_W,
-    index * SNAP_W,
-    (index + 1) * SNAP_W,
-  ];
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sub-components
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const rotateY = scrollX.interpolate({
-    inputRange, outputRange: ['28deg', '0deg', '-28deg'], extrapolate: 'clamp',
-  });
-  const cardScale = scrollX.interpolate({
-    inputRange, outputRange: [0.86, 1, 0.86], extrapolate: 'clamp',
-  });
-  const opacity = scrollX.interpolate({
-    inputRange, outputRange: [0.65, 1, 0.65], extrapolate: 'clamp',
-  });
-
-  return (
-    <Animated.View
-      style={[
-        styles.hourlyCard,
-        { opacity, transform: [{ perspective: 900 }, { rotateY }, { scale: cardScale }] },
-      ]}
-    >
-      <Text style={styles.hourlyTime}>{item.time}</Text>
-      <Ionicons name={ICON_MAP[item.icon] || 'partly-sunny'} size={26} color="#fff" />
-      <Text style={styles.hourlyTemp}>{item.temp}°</Text>
-      {item.rain > 0 && (
-        <View style={styles.rainRow}>
-          <Ionicons name="water" size={10} color="#93C5FD" />
-          <Text style={styles.rainText}>{item.rain}%</Text>
-        </View>
-      )}
-    </Animated.View>
-  );
+// ── Section header ────────────────────────────────────────────────────────────
+function SectionHeader({ title }) {
+  return <Text style={S.sectionHeader}>{title}</Text>;
 }
 
-// ── Animated Daily Row ────────────────────────────────────────────────────────
-function DailyRow3D({ item, index }) {
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(anim, {
-      toValue: 1, duration: 450, delay: 300 + index * 80, useNativeDriver: true,
-    }).start();
-  }, []);
-
-  const translateX = anim.interpolate({ inputRange: [0, 1], outputRange: [-44, 0] });
-  const opacity    = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-
-  return (
-    <Animated.View style={[styles.dailyRow, { opacity, transform: [{ translateX }] }]}>
-      <Text style={styles.dailyDay}>{item.day}</Text>
-      <Ionicons name={ICON_MAP[item.icon] || 'partly-sunny'} size={22} color="rgba(255,255,255,0.75)" />
-      <View style={styles.dailyRainBar}>
-        <View style={[styles.dailyRainFill, { width: `${Math.min(item.rain, 100)}%` }]} />
+// ── Hourly item (memoised for FlatList perf) ──────────────────────────────────
+const HourlyItem = memo(({ item }) => (
+  <View style={[S.hourlyItem, item.isNow && S.hourlyItemNow]}>
+    <Text style={[S.hourlyTime, item.isNow && S.hourlyTimeNow]}>{item.isNow ? 'Now' : item.time}</Text>
+    <Ionicons
+      name={`${item.conditionIcon}-outline`}
+      size={20}
+      color={item.isNow ? '#FFFFFF' : C.greenLight}
+    />
+    <Text style={[S.hourlyTemp, item.isNow && S.hourlyTempNow]}>{item.temperature}°</Text>
+    {item.precipitationProbability > 0 && (
+      <View style={S.rainRow}>
+        <Ionicons name="water" size={9} color={item.isNow ? 'rgba(255,255,255,0.8)' : '#3B82F6'} />
+        <Text style={[S.rainPct, item.isNow && { color: 'rgba(255,255,255,0.8)' }]}>
+          {item.precipitationProbability}%
+        </Text>
       </View>
-      <Text style={styles.dailyRainPct}>{item.rain}%</Text>
-      <Text style={styles.dailyLow}>{item.low}°</Text>
-      <Text style={styles.dailyHigh}>{item.high}°</Text>
-    </Animated.View>
+    )}
+  </View>
+));
+
+// ── Daily row (memoised) ──────────────────────────────────────────────────────
+const DailyRow = memo(({ item, isToday }) => {
+  const range = item.maxTemp - item.minTemp || 1;
+  return (
+    <View style={[S.dailyRow, isToday && S.dailyRowToday]}>
+      <Text style={[S.dailyDay, isToday && S.dailyDayToday]}>{item.dateLabel}</Text>
+      <Ionicons name={`${item.conditionIcon}-outline`} size={22} color={isToday ? C.green : C.sub} />
+      <View style={S.dailyTempWrap}>
+        <Text style={S.dailyLow}>{item.minTemp}°</Text>
+        {/* Temperature bar */}
+        <View style={S.dailyBar}>
+          <View style={[S.dailyBarFill, { flex: range }]} />
+        </View>
+        <Text style={S.dailyHigh}>{item.maxTemp}°</Text>
+      </View>
+      <View style={S.dailyRainBadge}>
+        <Ionicons name="water" size={9} color="#3B82F6" />
+        <Text style={S.dailyRainPct}>{item.precipitationProbability}%</Text>
+      </View>
+    </View>
   );
-}
+});
 
-// ── 3D Stat Card ──────────────────────────────────────────────────────────────
-function StatCard3D({ icon, label, value, unit, color, index }) {
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.timing(anim, {
-      toValue: 1, duration: 550, delay: 200 + index * 100, useNativeDriver: true,
-    }).start();
-  }, []);
-
-  const cardScale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] });
-  const opacity   = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+// ── Soil moisture bar ─────────────────────────────────────────────────────────
+function MoistureBar({ label, value }) {
+  const pct   = value != null ? Math.min(100, Math.max(0, value)) : 0;
+  const color = moistureColor(value);
+  const stateLabel = value == null ? '—'
+    : value < 20  ? 'Dry'
+    : value < 50  ? 'Low'
+    : value < 75  ? 'Good'
+    : 'Wet';
 
   return (
-    <TiltCard style={styles.statCardOuter} innerStyle={styles.statCardInner}>
-      <Animated.View style={[styles.statCardContent, { opacity, transform: [{ scale: cardScale }] }]}>
-        <View style={[styles.statIconRing, { backgroundColor: `${color}22` }]}>
-          <Ionicons name={icon} size={24} color={color || '#60A5FA'} />
-        </View>
-        <Text style={styles.statValue}>{value}{unit}</Text>
-        <Text style={styles.statLabel}>{label}</Text>
-      </Animated.View>
-    </TiltCard>
-  );
-}
-
-// ── Main Screen ───────────────────────────────────────────────────────────────
-export default function WeatherHome({ navigation }) {
-  const { t } = useLanguage();
-  const [weather,  setWeather]  = useState(null);
-  const [loading,  setLoading]  = useState(true);
-  const [locLabel, setLocLabel] = useState('Detecting location…');
-  const [error,    setError]    = useState(null);
-
-  // Scroll values
-  const scrollY = useRef(new Animated.Value(0)).current;
-  const scrollX = useRef(new Animated.Value(0)).current;
-
-  // Ambient animations
-  const pulse        = useRef(new Animated.Value(1)).current;
-  const heroEntrance = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    // Pulsing weather icon
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulse, { toValue: 1.13, duration: 1900, useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 1,    duration: 1900, useNativeDriver: true }),
-      ])
-    ).start();
-
-    // Hero entrance
-    Animated.timing(heroEntrance, {
-      toValue: 1, duration: 850, delay: 200, useNativeDriver: true,
-    }).start();
-  }, []);
-
-  // Hero scroll-driven 3D transforms
-  const heroScale   = scrollY.interpolate({ inputRange: [0, 220], outputRange: [1, 0.88],   extrapolate: 'clamp' });
-  const heroRotateX = scrollY.interpolate({ inputRange: [0, 220], outputRange: ['0deg', '5deg'], extrapolate: 'clamp' });
-  const heroOpacity = scrollY.interpolate({ inputRange: [0, 180], outputRange: [1, 0.55],   extrapolate: 'clamp' });
-
-  const heroEntranceStyle = {
-    opacity:   heroEntrance,
-    transform: [{ translateY: heroEntrance.interpolate({ inputRange: [0, 1], outputRange: [36, 0] }) }],
-  };
-
-  const fetchWeather = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      let lat = 18.52, lon = 73.86;
-      let cityName = 'Pune', stateName = 'Maharashtra';
-
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        lat = loc.coords.latitude;
-        lon = loc.coords.longitude;
-        const places = await Location.reverseGeocodeAsync({ latitude: lat, longitude: lon });
-        if (places.length > 0) {
-          const p = places[0];
-          cityName  = p.city || p.district || p.subregion || p.name || 'Your Location';
-          stateName = p.region || 'India';
-        }
-      }
-      setLocLabel(`${cityName}, ${stateName}`);
-
-      const url =
-        `https://api.open-meteo.com/v1/forecast` +
-        `?latitude=${lat}&longitude=${lon}` +
-        `&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code,cloud_cover,surface_pressure,uv_index` +
-        `&hourly=temperature_2m,weather_code,precipitation_probability` +
-        `&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max` +
-        `&forecast_days=7&timezone=Asia/Kolkata&wind_speed_unit=kmh`;
-
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-
-      setWeather(buildWeatherData(data, cityName, stateName));
-    } catch (e) {
-      console.error('[Weather]', e.message);
-      setError('Could not load weather. Check your connection.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchWeather(); }, [fetchWeather]);
-
-  // ── Loading ────────────────────────────────────────────────────────────────
-  if (loading) {
-    return (
-      <LinearGradient colors={['#060D1A', '#0F2A1A']} style={styles.fullCenter}>
-        <Animated.View style={{ transform: [{ scale: pulse }] }}>
-          <Ionicons name="partly-sunny-outline" size={72} color="rgba(255,255,255,0.35)" />
-        </Animated.View>
-        <ActivityIndicator size="large" color="rgba(255,255,255,0.7)" style={{ marginTop: 28 }} />
-        <Text style={styles.loadingText}>{locLabel}</Text>
-      </LinearGradient>
-    );
-  }
-
-  // ── Error ──────────────────────────────────────────────────────────────────
-  if (error || !weather) {
-    return (
-      <LinearGradient colors={['#060D1A', '#101820']} style={styles.fullCenter}>
-        <Ionicons name="cloud-offline-outline" size={68} color="rgba(255,255,255,0.3)" />
-        <Text style={styles.errorText}>{error || 'No weather data'}</Text>
-        <TouchableOpacity onPress={fetchWeather} style={styles.retryBtn}>
-          <Text style={styles.retryText}>Retry</Text>
-        </TouchableOpacity>
-      </LinearGradient>
-    );
-  }
-
-  // Dynamic gradient per condition
-  const bgColors =
-    weather.current.rainChance > 50 ? ['#060E1F', '#0A2040', '#1A3A6A'] :
-    weather.current.temp > 35       ? ['#1A0800', '#5C1A00', '#C2410C'] :
-                                      ['#060E1F', '#0A1F3A', '#0D3524'];
-
-  const PARTICLES = [
-    { icon: 'cloud',        size: 30, color: 'rgba(255,255,255,0.3)', delay: 0,   duration: 3200, particleStyle: { top: '10%', left: '6%' }  },
-    { icon: 'cloud',        size: 18, color: 'rgba(255,255,255,0.2)', delay: 500, duration: 2900, particleStyle: { top: '22%', right: '8%' }  },
-    { icon: 'star',         size: 12, color: 'rgba(255,220,100,0.6)', delay: 200, duration: 2500, particleStyle: { top: '7%',  left: '38%' }  },
-    { icon: 'star',         size: 8,  color: 'rgba(255,220,100,0.5)', delay: 700, duration: 3100, particleStyle: { top: '33%', left: '18%' }  },
-    { icon: 'star',         size: 10, color: 'rgba(255,220,100,0.4)', delay: 100, duration: 2700, particleStyle: { top: '5%',  right: '28%' } },
-    { icon: 'water',        size: 16, color: 'rgba(147,197,253,0.6)', delay: 600, duration: 3400, particleStyle: { top: '38%', right: '5%' }  },
-    { icon: 'leaf-outline', size: 14, color: 'rgba(134,239,172,0.5)', delay: 900, duration: 2800, particleStyle: { top: '43%', left: '4%' }   },
-  ];
-
-  return (
-    <View style={styles.root}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
-
-      <Animated.ScrollView
-        showsVerticalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true }
-        )}
-      >
-        {/* ────────── HERO ────────── */}
-        <Animated.View
-          style={[
-            styles.heroWrapper,
-            {
-              transform: [
-                { perspective: 1200 },
-                { scale: heroScale },
-                { rotateX: heroRotateX },
-              ],
-              opacity: heroOpacity,
-            },
-          ]}
-        >
-          <LinearGradient colors={bgColors} style={styles.heroGradient}>
-            {/* Ambient particles */}
-            {PARTICLES.map((p, i) => <FloatingParticle key={i} {...p} />)}
-
-            {/* Location bar */}
-            <Animated.View style={[styles.locationBar, heroEntranceStyle]}>
-              <Ionicons name="location" size={15} color="rgba(255,255,255,0.8)" />
-              <Text style={styles.locationName}>{weather.city}, {weather.state}</Text>
-              <TouchableOpacity style={styles.refreshBtn} onPress={fetchWeather}>
-                <Ionicons name="refresh" size={18} color="#fff" />
-              </TouchableOpacity>
-            </Animated.View>
-
-            {/* Main weather content */}
-            <Animated.View style={[styles.heroCenter, heroEntranceStyle]}>
-              {/* Glowing pulsing icon */}
-              <Animated.View style={[styles.iconWrap, { transform: [{ scale: pulse }] }]}>
-                <LinearGradient
-                  colors={['rgba(255,255,255,0.18)', 'rgba(255,255,255,0.04)']}
-                  style={styles.iconGlow}
-                >
-                  <Ionicons
-                    name={ICON_MAP[weather.current.icon] || 'partly-sunny'}
-                    size={92}
-                    color="#FFFFFF"
-                  />
-                </LinearGradient>
-              </Animated.View>
-
-              <Text style={styles.tempText}>{weather.current.temp}°</Text>
-              <Text style={styles.conditionText}>{weather.current.condition}</Text>
-              <Text style={styles.feelsLikeText}>Feels like {weather.current.feelsLike}°C</Text>
-            </Animated.View>
-
-            {/* Quick stats strip */}
-            <Animated.View style={[styles.statsStrip, heroEntranceStyle]}>
-              <View style={styles.stripStat}>
-                <Ionicons name="water" size={17} color="#93C5FD" />
-                <Text style={styles.stripVal}>{weather.current.humidity}%</Text>
-                <Text style={styles.stripLabel}>Humidity</Text>
-              </View>
-              <View style={styles.stripDivider} />
-              <View style={styles.stripStat}>
-                <Ionicons name="rainy" size={17} color="#93C5FD" />
-                <Text style={styles.stripVal}>{weather.current.rainChance}%</Text>
-                <Text style={styles.stripLabel}>Rain</Text>
-              </View>
-              <View style={styles.stripDivider} />
-              <View style={styles.stripStat}>
-                <Ionicons name="leaf" size={17} color="#86EFAC" />
-                <Text style={styles.stripVal}>{weather.current.windSpeed}</Text>
-                <Text style={styles.stripLabel}>km/h</Text>
-              </View>
-            </Animated.View>
-          </LinearGradient>
-        </Animated.View>
-
-        {/* ────────── BODY ────────── */}
-        <View style={styles.body}>
-
-          {/* Farming Tip — tiltable 3D card */}
-          <TiltCard style={styles.tipOuter} innerStyle={styles.tipInner}>
-            <LinearGradient colors={['#0F2A14', '#183D20']} style={styles.tipGradient}>
-              <View style={styles.tipIconRing}>
-                <Ionicons name="bulb" size={26} color="#FCD34D" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.tipTitle}>Farming Tip</Text>
-                <Text style={styles.tipText}>{weather.farmingTip}</Text>
-              </View>
-            </LinearGradient>
-          </TiltCard>
-
-          {/* Hourly — 3D perspective carousel */}
-          {weather.hourly.length > 0 && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>{t('todayHourly')}</Text>
-              <Animated.ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                scrollEventThrottle={16}
-                snapToInterval={SNAP_W}
-                decelerationRate="fast"
-                contentContainerStyle={styles.hourlyContent}
-                onScroll={Animated.event(
-                  [{ nativeEvent: { contentOffset: { x: scrollX } } }],
-                  { useNativeDriver: true }
-                )}
-              >
-                {weather.hourly.map((item, i) => (
-                  <HourlyCard3D key={i} item={item} index={i} scrollX={scrollX} />
-                ))}
-              </Animated.ScrollView>
-            </View>
-          )}
-
-          {/* Stats — 2×2 tiltable grid */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('moreDetails')}</Text>
-            <View style={styles.statsGrid}>
-              <StatCard3D icon="eye"         label="Visibility" value={weather.current.visibility} unit=" km"  color="#60A5FA" index={0} />
-              <StatCard3D icon="sunny"       label="UV Index"   value={weather.current.uvIndex}    unit=""     color="#FBBF24" index={1} />
-              <StatCard3D icon="speedometer" label="Pressure"   value={weather.current.pressure}   unit=" hPa" color="#C084FC" index={2} />
-              <StatCard3D icon="water"       label="Humidity"   value={weather.current.humidity}   unit="%"    color="#34D399" index={3} />
-            </View>
-          </View>
-
-          {/* 7-Day forecast — staggered rows */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{t('weekForecast')}</Text>
-            <View style={styles.weekCard}>
-              {weather.weekly.map((item, i) => (
-                <DailyRow3D key={i} item={item} index={i} />
-              ))}
-            </View>
-          </View>
-
-          {/* Nav buttons */}
-          <TouchableOpacity
-            style={styles.navBtn}
-            activeOpacity={0.85}
-            onPress={() => navigation.navigate('CropCalendar')}
-          >
-            <LinearGradient colors={['#0D3020', '#1B5E37']} style={styles.navBtnGrad}>
-              <View style={styles.navBtnIcon}>
-                <Ionicons name="calendar" size={26} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.navBtnTitle}>{t('cropPersonalization')}</Text>
-                <Text style={styles.navBtnSub}>{t('cropCalendarSub')}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
-            </LinearGradient>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.navBtn, { marginBottom: 32 }]}
-            activeOpacity={0.85}
-            onPress={() => navigation.navigate('StateCrops', { state: weather.state })}
-          >
-            <LinearGradient colors={['#0D1040', '#1A237E']} style={styles.navBtnGrad}>
-              <View style={[styles.navBtnIcon, { backgroundColor: 'rgba(255,255,255,0.15)' }]}>
-                <Ionicons name="map-outline" size={26} color="#fff" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.navBtnTitle}>State Farming Guide</Text>
-                <Text style={styles.navBtnSub}>Crops & practices for {weather.state}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
-            </LinearGradient>
-          </TouchableOpacity>
-
-        </View>
-      </Animated.ScrollView>
+    <View style={S.moistureRow}>
+      <Text style={S.moistureLabel}>{label}</Text>
+      <View style={S.moistureTrack}>
+        <Animated.View style={[S.moistureFill, { width: `${pct}%`, backgroundColor: color }]} />
+      </View>
+      <Text style={[S.moistureVal, { color }]}>{value != null ? `${value.toFixed(0)}%` : '—'} · {stateLabel}</Text>
     </View>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
-  root:        { flex: 1, backgroundColor: '#060E1F' },
-  fullCenter:  { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { color: 'rgba(255,255,255,0.5)', marginTop: 14, fontSize: 14, letterSpacing: 0.4 },
-  errorText:   { color: 'rgba(255,255,255,0.7)', fontSize: 15, fontWeight: '700', marginTop: 18, textAlign: 'center' },
-  retryBtn:    { marginTop: 22, backgroundColor: '#1B5E37', paddingHorizontal: 32, paddingVertical: 13, borderRadius: 14 },
-  retryText:   { color: '#fff', fontWeight: '800', fontSize: 15 },
+// ── Soil temperature row ──────────────────────────────────────────────────────
+function SoilTempRow({ label, value }) {
+  return (
+    <View style={S.soilTempRow}>
+      <Ionicons name="thermometer-outline" size={14} color={C.amber} />
+      <Text style={S.soilTempLabel}>{label}</Text>
+      <Text style={S.soilTempVal}>{value != null ? `${value}°C` : '—'}</Text>
+    </View>
+  );
+}
 
-  // Hero
-  heroWrapper: {
-    height: HERO_H,
-    overflow: 'hidden',
-  },
-  heroGradient: {
-    flex: 1,
-    paddingTop: 52,
-    paddingHorizontal: 22,
-    paddingBottom: 22,
-    justifyContent: 'space-between',
-  },
-  particle: { position: 'absolute' },
+// ── Sun arc ───────────────────────────────────────────────────────────────────
+// Renders a semicircle arc made of 40 coloured dots.
+// Orange → amber → sky-blue → indigo as the day progresses.
+// Sun glows at the current position; grey dots = remaining daylight.
+function SunArc({ sunriseIso, sunsetIso, sunrise, sunset }) {
+  const progress = sunProgress(sunriseIso, sunsetIso);
+  const ARC_W    = W - 64;
+  const ARC_H    = 120;
+  const CX       = ARC_W / 2;
+  const RX       = ARC_W / 2 - 6;
+  const RY       = ARC_H - 14;
 
-  locationBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, zIndex: 10,
-  },
-  locationName: {
-    flex: 1, fontSize: 15, fontWeight: '700',
-    color: 'rgba(255,255,255,0.85)', letterSpacing: 0.3,
-  },
-  refreshBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    justifyContent: 'center', alignItems: 'center',
-  },
+  // ── 40 dots along a semicircle (left = sunrise, right = sunset)
+  const SEGMENTS = 40;
+  const dots = Array.from({ length: SEGMENTS + 1 }, (_, i) => {
+    const t     = i / SEGMENTS;
+    const angle = Math.PI - t * Math.PI;           // π → 0
+    return {
+      x:    CX + RX * Math.cos(angle),
+      y:    ARC_H - RY * Math.sin(angle),
+      t,
+      past: t <= progress,
+    };
+  });
 
-  heroCenter: { alignItems: 'center', flex: 1, justifyContent: 'center', marginTop: -8 },
-  iconWrap:   { marginBottom: 10 },
-  iconGlow:   {
-    width: 136, height: 136, borderRadius: 68,
-    justifyContent: 'center', alignItems: 'center',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
-  },
-  tempText:      { fontSize: 90, fontWeight: '900', color: '#fff', letterSpacing: -4, lineHeight: 96 },
-  conditionText: { fontSize: 20, color: 'rgba(255,255,255,0.85)', fontWeight: '600', marginTop: 4 },
-  feelsLikeText: { fontSize: 13, color: 'rgba(255,255,255,0.55)', marginTop: 6 },
+  // ── Sun glow position
+  const sunAngle = Math.PI - progress * Math.PI;
+  const sunX     = CX + RX * Math.cos(sunAngle);
+  const sunY     = ARC_H - RY * Math.sin(sunAngle);
 
-  statsStrip: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    borderRadius: 20, padding: 16,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
-  },
-  stripStat:    { flex: 1, alignItems: 'center', gap: 4 },
-  stripDivider: { width: 1, backgroundColor: 'rgba(255,255,255,0.15)' },
-  stripVal:     { fontSize: 18, fontWeight: '800', color: '#fff' },
-  stripLabel:   { fontSize: 11, color: 'rgba(255,255,255,0.55)', fontWeight: '500' },
+  // ── Daylight duration label
+  const durMs       = new Date(sunsetIso).getTime() - new Date(sunriseIso).getTime();
+  const totalH      = Math.floor(durMs / 3_600_000);
+  const totalM      = Math.round((durMs % 3_600_000) / 60_000);
+  const daylightLbl = `${totalH}h ${totalM}m`;
 
-  // Body
-  body: { backgroundColor: '#060E1F', paddingTop: 4 },
+  const isDay = progress > 0 && progress < 1;
 
-  // Farming Tip
-  tipOuter:    { marginHorizontal: 16, marginVertical: 12, borderRadius: 20, overflow: 'hidden', ...SHADOWS.medium },
-  tipInner:    { borderRadius: 20, overflow: 'hidden' },
-  tipGradient: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 14,
-    padding: 18, borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
-  },
-  tipIconRing: {
-    width: 52, height: 52, borderRadius: 26,
-    backgroundColor: 'rgba(252,211,77,0.12)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  tipTitle: { fontSize: 13, fontWeight: '800', color: '#fff', marginBottom: 4, letterSpacing: 0.4 },
-  tipText:  { fontSize: 13, color: 'rgba(255,255,255,0.75)', lineHeight: 20 },
+  // dot colour — gradient across the arc
+  function dotColor(t) {
+    if (t < 0.20) return '#FB923C';   // early morning — orange
+    if (t < 0.45) return '#FBBF24';   // morning       — amber
+    if (t < 0.70) return '#38BDF8';   // afternoon     — sky blue
+    return '#818CF8';                  // evening       — soft indigo
+  }
 
-  // Sections
-  section:      { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 6 },
-  sectionTitle: { fontSize: 17, fontWeight: '800', color: '#fff', marginBottom: 14, letterSpacing: 0.2 },
+  return (
+    <View style={S.arcWrap}>
 
-  // Hourly
-  hourlyContent: { gap: CARD_GAP, paddingHorizontal: 4, paddingVertical: 10 },
-  hourlyCard: {
-    width: CARD_W, alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.09)',
-    borderRadius: 22, padding: 14, gap: 8,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)',
-  },
-  hourlyTime: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.7)' },
-  hourlyTemp: { fontSize: 19, fontWeight: '800', color: '#fff' },
-  rainRow:    { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  rainText:   { fontSize: 11, color: '#93C5FD' },
+      {/* ── Arc canvas */}
+      <View style={{ width: ARC_W, height: ARC_H + 8 }}>
 
-  // Stats grid
-  statsGrid:      { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  statCardOuter:  { width: '47%' },
-  statCardInner:  { borderRadius: 20, overflow: 'hidden' },
-  statCardContent: {
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 20, padding: 18, alignItems: 'center', gap: 8,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)',
-  },
-  statIconRing: {
-    width: 48, height: 48, borderRadius: 24,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  statValue: { fontSize: 20, fontWeight: '800', color: '#fff' },
-  statLabel: { fontSize: 12, color: 'rgba(255,255,255,0.55)', fontWeight: '500' },
+        {/* Horizon baseline */}
+        <View style={{
+          position: 'absolute', bottom: 8, left: 0, right: 0,
+          height: 1.5, backgroundColor: '#E5E7EB', borderRadius: 1,
+        }} />
 
-  // Weekly
-  weekCard: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderRadius: 20, padding: 6,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
-  },
-  dailyRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingVertical: 13, paddingHorizontal: 12,
-    borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.05)',
-  },
-  dailyDay:     { width: 36, fontSize: 14, fontWeight: '700', color: '#fff' },
-  dailyRainBar: { flex: 1, height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, overflow: 'hidden' },
-  dailyRainFill:{ height: '100%', backgroundColor: '#60A5FA', borderRadius: 3 },
-  dailyRainPct: { width: 32, fontSize: 12, color: 'rgba(255,255,255,0.5)', textAlign: 'center' },
-  dailyLow:     { width: 30, fontSize: 14, color: 'rgba(255,255,255,0.55)', textAlign: 'right' },
-  dailyHigh:    { width: 36, fontSize: 14, fontWeight: '800', color: '#fff', textAlign: 'right' },
+        {/* Coloured dot segments */}
+        {dots.map((d, i) => (
+          <View key={i} style={{
+            position:    'absolute',
+            left:        d.x - 3,
+            top:         d.y - 3,
+            width:       6, height: 6, borderRadius: 3,
+            backgroundColor: d.past ? dotColor(d.t) : '#D1D5DB',
+            opacity:     d.past ? 1 : 0.40,
+          }} />
+        ))}
 
-  // Nav buttons
-  navBtn: {
-    marginHorizontal: 16, marginBottom: 12,
-    borderRadius: 20, overflow: 'hidden', ...SHADOWS.medium,
+        {/* Glowing sun — moves along arc during day, sits at endpoints before/after */}
+        <View style={{
+          position:     'absolute',
+          left:         sunX - 15, top: sunY - 15,
+          width: 30, height: 30, borderRadius: 15,
+          backgroundColor: '#FFFBEB',
+          alignItems: 'center', justifyContent: 'center',
+          shadowColor:  '#F59E0B', shadowOpacity: 0.85,
+          shadowOffset: { width: 0, height: 0 }, shadowRadius: 10,
+          elevation:    10,
+        }}>
+          <Ionicons name="sunny" size={20} color="#F59E0B" />
+        </View>
+      </View>
+
+      {/* ── Sunrise / duration / sunset labels */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', width: ARC_W, marginTop: 10 }}>
+        <View style={{ alignItems: 'flex-start' }}>
+          <Text style={{ fontSize: 9, color: '#FB923C', fontWeight: '800', letterSpacing: 0.8 }}>SUNRISE</Text>
+          <Text style={{ fontSize: 16, fontWeight: '900', color: C.text, marginTop: 1 }}>{sunrise}</Text>
+        </View>
+        <View style={{ alignItems: 'center' }}>
+          <Ionicons name="sunny-outline" size={15} color="#FBBF24" />
+          <Text style={{ fontSize: 11, fontWeight: '700', color: C.sub, marginTop: 3 }}>{daylightLbl}</Text>
+        </View>
+        <View style={{ alignItems: 'flex-end' }}>
+          <Text style={{ fontSize: 9, color: '#818CF8', fontWeight: '800', letterSpacing: 0.8 }}>SUNSET</Text>
+          <Text style={{ fontSize: 16, fontWeight: '900', color: C.text, marginTop: 1 }}>{sunset}</Text>
+        </View>
+      </View>
+
+      {/* ── Daylight progress bar */}
+      <View style={{ width: ARC_W, marginTop: 14 }}>
+        <View style={{ height: 4, backgroundColor: '#F1F5F9', borderRadius: 2, overflow: 'hidden' }}>
+          <LinearGradient
+            colors={['#FB923C', '#FBBF24', '#38BDF8']}
+            start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+            style={{ height: 4, width: `${Math.min(100, Math.round(progress * 100))}%`, borderRadius: 2 }}
+          />
+        </View>
+        <Text style={{ fontSize: 10, color: C.sub, marginTop: 5, textAlign: 'center' }}>
+          {isDay
+            ? `${Math.round(progress * 100)}% of daylight passed`
+            : progress === 0 ? 'Before sunrise' : 'After sunset'}
+        </Text>
+      </View>
+
+    </View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Main Screen
+// ═══════════════════════════════════════════════════════════════════════════════
+export default function WeatherHome({ navigation, embeddedInHub }) {
+  const { language } = useLanguage();
+  const lang = language === 'hi' ? 'hi' : 'en';
+
+  const [weather,    setWeather]    = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [stale,      setStale]      = useState(false);
+  const [cachedAt,   setCachedAt]   = useState(null);
+  const [error,      setError]      = useState(null);
+  const [dismissed,  setDismissed]  = useState(false); // IMD alert dismiss
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  const applyData = useCallback(({ data, stale: s, cachedAt: ca }) => {
+    if (!data) return;
+    setWeather(data);
+    setStale(!!s);
+    setCachedAt(ca);
+    setLoading(false);
+    Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+  }, [fadeAnim]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setDismissed(false);
+    fadeAnim.setValue(0);
+
+    try {
+      const result = await fetchWeatherForCurrentLocation({
+        lang,
+        onCacheHit: applyData, // renders cached data immediately
+      });
+      applyData(result);       // then overwrite with fresh data
+    } catch (err) {
+      setError(err.message || 'Could not load weather data');
+      setLoading(false);
+    }
+  }, [lang, applyData, fadeAnim]);
+
+  useEffect(() => { load(); }, []);
+
+  // ── Loading state ──────────────────────────────────────────────────────────
+  if (loading && !weather) {
+    return (
+      <View style={[S.root, S.center]}>
+        <StatusBar barStyle="dark-content" />
+        <ActivityIndicator size="large" color={C.green} />
+        <Text style={S.loadTxt}>Fetching field data…</Text>
+      </View>
+    );
+  }
+
+  // ── Error (no cache) ───────────────────────────────────────────────────────
+  if (error && !weather) {
+    return (
+      <View style={[S.root, S.center]}>
+        <StatusBar barStyle="dark-content" />
+        <Ionicons name="alert-circle-outline" size={48} color="#9CA3AF" />
+        <Text style={S.errTxt}>{error}</Text>
+        <Text style={S.errSub}>कृपया इंटरनेट कनेक्ट करें{'\n'}Please connect to the internet</Text>
+        <TouchableOpacity style={S.retryBtn} onPress={load}>
+          <Text style={S.retryTxt}>Retry</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  const { current, hourly, daily, agriculture, advisories = [], alerts = [] } = weather;
+  const today   = daily?.[0];
+  const hour    = new Date().getHours();
+  const gradient = heroGradient(current.weatherCode, hour);
+  const visibleAlerts = dismissed ? [] : alerts;
+
+  return (
+    <Animated.View style={[S.root, { opacity: fadeAnim }]}>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+
+      {/* ── Standalone header (hidden inside AIWeatherHub) ─────────────── */}
+      {!embeddedInHub && (
+        <View style={[S.header, { paddingTop: Platform.OS === 'ios' ? 52 : 14 }]}>
+          <TouchableOpacity onPress={() => navigation?.goBack()}>
+            <Ionicons name="arrow-back" size={22} color={C.text} />
+          </TouchableOpacity>
+          <View style={S.headerCenter}>
+            <Ionicons name="location" size={14} color={C.green} />
+            <Text style={S.headerTitle}>Field Monitor</Text>
+          </View>
+          <TouchableOpacity onPress={load}>
+            <Ionicons name="refresh-outline" size={22} color={C.text} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={S.scroll}>
+
+        {/* ══ 1. HERO CARD ════════════════════════════════════════════════ */}
+        <ImageBackground
+          source={getWeatherImage(current.weatherCode, hour)}
+          style={S.hero}
+          imageStyle={S.heroImg}
+          resizeMode="cover"
+          blurRadius={1}
+        >
+          {/* Semi-transparent overlay — lets image show while keeping text readable */}
+          <LinearGradient
+            colors={['rgba(0,0,0,0.18)', 'rgba(0,0,0,0.62)']}
+            style={StyleSheet.absoluteFill}
+          />
+
+          {/* Location row */}
+          <View style={S.heroLocRow}>
+            <Ionicons name="location" size={12} color="rgba(255,255,255,0.80)" />
+            <Text style={S.heroLoc}>
+              {weather.meta?.location?.name
+                ? weather.meta.location.name.toUpperCase()
+                : `${parseFloat(weather.meta?.location?.lat ?? 0).toFixed(4)}°N, ${parseFloat(weather.meta?.location?.lon ?? 0).toFixed(4)}°E`}
+            </Text>
+            {stale && cachedAt ? (
+              <Text style={S.staleBadge}>· {formatLastUpdated(cachedAt)}</Text>
+            ) : null}
+          </View>
+
+          {/* Main temp */}
+          <Text style={S.heroTemp}>{current.temperature}°C</Text>
+          <Text style={S.heroCond}>{current.condition}</Text>
+
+          {/* Secondary stats row */}
+          <View style={S.heroStats}>
+            <View style={S.heroStat}>
+              <Ionicons name="thermometer-outline" size={13} color="rgba(255,255,255,0.70)" />
+              <Text style={S.heroStatTxt}>Feels {current.feelsLike}°C</Text>
+            </View>
+            <View style={S.heroStatDivider} />
+            <View style={S.heroStat}>
+              <Ionicons name="water-outline" size={13} color="rgba(255,255,255,0.70)" />
+              <Text style={S.heroStatTxt}>{current.humidity}%</Text>
+            </View>
+            <View style={S.heroStatDivider} />
+            <View style={S.heroStat}>
+              <Ionicons name="navigate-outline" size={13} color="rgba(255,255,255,0.70)" />
+              <Text style={S.heroStatTxt}>{current.windSpeed} km/h {current.windCompass}</Text>
+            </View>
+            {current.uvIndex > 0 && (
+              <>
+                <View style={S.heroStatDivider} />
+                <View style={S.heroStat}>
+                  <Ionicons name="sunny-outline" size={13} color="rgba(255,255,255,0.70)" />
+                  <Text style={S.heroStatTxt}>UV {current.uvIndex}</Text>
+                </View>
+              </>
+            )}
+          </View>
+
+          {/* Today min/max */}
+          {today && (
+            <View style={S.heroMinMax}>
+              <Text style={S.heroMinMaxTxt}>
+                H: {today.maxTemp}°C · L: {today.minTemp}°C
+              </Text>
+            </View>
+          )}
+        </ImageBackground>
+
+        {/* ══ 2. IMD ALERT BANNER ═════════════════════════════════════════ */}
+        {visibleAlerts.length > 0 && (
+          <View style={[S.alertBanner, { backgroundColor: SEVERITY_BG[visibleAlerts[0].severity] + '22', borderColor: SEVERITY_BG[visibleAlerts[0].severity] }]}>
+            <Ionicons name="warning" size={20} color={SEVERITY_BG[visibleAlerts[0].severity]} />
+            <View style={S.alertBody}>
+              <Text style={[S.alertTitle, { color: SEVERITY_BG[visibleAlerts[0].severity] }]}>
+                {visibleAlerts[0].title}
+              </Text>
+              <Text style={S.alertDesc} numberOfLines={2}>{visibleAlerts[0].description}</Text>
+            </View>
+            <TouchableOpacity onPress={() => setDismissed(true)}>
+              <Ionicons name="close" size={18} color={C.sub} />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ══ 3. FARMING ADVISORIES ═══════════════════════════════════════ */}
+        {advisories.length > 0 && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'कृषि सलाह' : 'Farming Advisories'} />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.advisoryRow}>
+              {advisories.map((adv, i) => {
+                const col = ADVISORY_COLORS[adv.color] || ADVISORY_COLORS.green;
+                return (
+                  <View key={i} style={[S.advisoryCard, { backgroundColor: col.bg, borderColor: col.border }]}>
+                    <Ionicons name={`${adv.icon}-outline`} size={22} color={col.icon} />
+                    <Text style={[S.advisoryTitle, { color: col.icon }]}>{adv.title}</Text>
+                    <Text style={S.advisoryDesc}>{adv.desc}</Text>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
+
+        {/* ══ 4. HOURLY FORECAST ══════════════════════════════════════════ */}
+        {hourly?.length > 0 && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'प्रति घंटा पूर्वानुमान' : 'Hourly Forecast'} />
+            <View style={S.card}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.hourlyRow}>
+                {hourly.slice(0, 24).map((item, i) => (
+                  <HourlyItem key={i} item={item} />
+                ))}
+              </ScrollView>
+            </View>
+          </View>
+        )}
+
+        {/* ══ 5. 7-DAY FORECAST ═══════════════════════════════════════════ */}
+        {daily?.length > 0 && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? '7-दिन का पूर्वानुमान' : '7-Day Forecast'} />
+            <View style={S.card}>
+              {daily.map((item, i) => (
+                <React.Fragment key={i}>
+                  <DailyRow item={item} isToday={i === 0} />
+                  {i < daily.length - 1 && <View style={S.divider} />}
+                </React.Fragment>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* ══ 6. WEATHER ALERTS ══════════════════════════════════════════ */}
+        {(() => {
+          const wxAlerts = generateWeatherAlerts(daily, alerts, lang);
+          return (
+            <View style={S.section}>
+              {/* Header row */}
+              <View style={S.alertsHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Ionicons name="notifications" size={15} color={C.text} />
+                  <Text style={S.sectionHeader}>
+                    {lang === 'hi' ? 'मौसम अलर्ट' : 'Weather Alerts'}
+                  </Text>
+                </View>
+                {wxAlerts.length > 0 && (
+                  <View style={S.alertCountBadge}>
+                    <Text style={S.alertCountTxt}>{wxAlerts.length}</Text>
+                  </View>
+                )}
+              </View>
+
+              {wxAlerts.length === 0 ? (
+                /* All-clear card */
+                <View style={S.allClearCard}>
+                  <Ionicons name="checkmark-circle" size={28} color="#16A34A" />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={S.allClearTitle}>
+                      {lang === 'hi' ? 'सब ठीक है!' : 'All Clear!'}
+                    </Text>
+                    <Text style={S.allClearDesc}>
+                      {lang === 'hi'
+                        ? 'अगले 7 दिनों में कोई गंभीर मौसम चेतावनी नहीं है।'
+                        : 'No severe weather events expected in the next 7 days.'}
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                wxAlerts.map((al, i) => {
+                  const col = ALERT_COLORS[al.color] || ALERT_COLORS.yellow;
+                  return (
+                    <View key={i} style={[S.alertCard, { backgroundColor: col.bg, borderColor: col.border }]}>
+                      {/* Left colour bar */}
+                      <View style={[S.alertBar, { backgroundColor: col.border }]} />
+
+                      {/* Icon */}
+                      <View style={[S.alertIcon, { backgroundColor: col.border + '20' }]}>
+                        <Ionicons name={al.icon} size={20} color={col.icon} />
+                      </View>
+
+                      {/* Text */}
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                          <Text style={[S.alertCardTitle, { color: col.icon }]}>{al.title}</Text>
+                          <View style={[S.severityBadge, { backgroundColor: col.badge }]}>
+                            <Text style={S.severityTxt}>{al.severity}</Text>
+                          </View>
+                        </View>
+                        <Text style={S.alertDayTxt}>
+                          <Ionicons name="calendar-outline" size={10} color={C.sub} /> {al.day}
+                        </Text>
+                        <Text style={S.alertCardDesc}>{al.desc}</Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </View>
+          );
+        })()}
+
+        {/* ══ 7. SOIL DASHBOARD ═══════════════════════════════════════════ */}
+        {agriculture && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'मिट्टी का डैशबोर्ड' : 'Soil Dashboard'} />
+            <View style={S.card}>
+
+              {/* Soil temperatures */}
+              <Text style={S.soilGroupLabel}>{lang === 'hi' ? 'मिट्टी का तापमान' : 'Soil Temperature'}</Text>
+              <SoilTempRow label={lang === 'hi' ? 'सतह (0cm)'   : 'Surface (0cm)'}  value={agriculture.soilTemperature.surface}  />
+              <SoilTempRow label={lang === 'hi' ? 'गहराई 6cm'    : 'Depth 6cm'}      value={agriculture.soilTemperature.depth6cm} />
+              <SoilTempRow label={lang === 'hi' ? 'गहराई 18cm'   : 'Depth 18cm'}     value={agriculture.soilTemperature.depth18cm} />
+
+              <View style={S.divider} />
+
+              {/* Soil moisture */}
+              <Text style={S.soilGroupLabel}>{lang === 'hi' ? 'मिट्टी की नमी' : 'Soil Moisture'}</Text>
+              <MoistureBar label={lang === 'hi' ? 'सतह 0–1cm'   : 'Surface 0–1cm'}   value={agriculture.soilMoisture.surface}     />
+              <MoistureBar label={lang === 'hi' ? 'गहराई 1–3cm' : 'Depth 1–3cm'}     value={agriculture.soilMoisture.depth1to3cm} />
+              <MoistureBar label={lang === 'hi' ? 'गहराई 3–9cm' : 'Depth 3–9cm'}     value={agriculture.soilMoisture.depth3to9cm} />
+
+              <View style={S.divider} />
+
+              {/* Evapotranspiration */}
+              <View style={S.etRow}>
+                <Ionicons name="leaf-outline" size={16} color={C.green} />
+                <View style={{ flex: 1, marginLeft: 8 }}>
+                  <Text style={S.etLabel}>{lang === 'hi' ? 'वाष्पोत्सर्जन (ET)' : 'Evapotranspiration (ET)'}</Text>
+                  <Text style={S.etSub}>
+                    {lang === 'hi'
+                      ? 'पौधे + मिट्टी से पानी का वाष्पीकरण'
+                      : 'Water lost from crop + soil to atmosphere'}
+                  </Text>
+                </View>
+                <Text style={S.etVal}>
+                  {agriculture.evapotranspiration != null ? `${agriculture.evapotranspiration} mm` : '—'}
+                </Text>
+              </View>
+              {agriculture.referenceET != null && (
+                <View style={[S.etRow, { marginTop: 6 }]}>
+                  <Ionicons name="water-outline" size={16} color="#3B82F6" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={S.etLabel}>
+                      {lang === 'hi' ? 'संदर्भ ET (FAO-56)' : 'Reference ET (FAO-56)'}
+                    </Text>
+                    <Text style={S.etSub}>
+                      {lang === 'hi' ? 'सिंचाई निर्णय का आधार' : 'Basis for irrigation scheduling'}
+                    </Text>
+                  </View>
+                  <Text style={S.etVal}>{agriculture.referenceET} mm</Text>
+                </View>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* ══ 7. SUNRISE / SUNSET ARC ═════════════════════════════════════ */}
+        {today?.sunriseIso && today?.sunsetIso && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'सूर्योदय / सूर्यास्त' : 'Sunrise & Sunset'} />
+            <View style={S.card}>
+              <SunArc
+                sunriseIso={today.sunriseIso}
+                sunsetIso={today.sunsetIso}
+                sunrise={today.sunrise}
+                sunset={today.sunset}
+              />
+            </View>
+          </View>
+        )}
+
+        {/* ══ 8. ATMOSPHERE DASHBOARD ════════════════════════════════════ */}
+        {current && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'वायुमंडल डेटा' : 'Atmosphere'} />
+            <View style={S.card}>
+              <View style={S.atmoGrid}>
+
+                {/* Visibility */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="eye-outline" size={20} color="#6366F1" />
+                  <Text style={S.atmoVal}>{current.visibility != null ? `${current.visibility} km` : '—'}</Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'दृश्यता' : 'Visibility'}</Text>
+                </View>
+
+                {/* Dew Point */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="thermometer-outline" size={20} color="#0EA5E9" />
+                  <Text style={S.atmoVal}>{current.dewPoint != null ? `${current.dewPoint}°C` : '—'}</Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'ओस बिंदु' : 'Dew Point'}</Text>
+                </View>
+
+                {/* Wind Gusts */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="navigate-outline" size={20} color="#F59E0B" />
+                  <Text style={S.atmoVal}>{current.windGusts != null ? `${current.windGusts} km/h` : '—'}</Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'हवा के झोंके' : 'Wind Gusts'}</Text>
+                </View>
+
+                {/* Leaf Wetness */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="leaf-outline" size={20} color="#16A34A" />
+                  <Text style={[S.atmoVal, { color: (current.leafWetness ?? 0) > 60 ? '#DC2626' : C.text }]}>
+                    {current.leafWetness != null ? `${Math.round(current.leafWetness)}%` : '—'}
+                  </Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'पत्ती नमी' : 'Leaf Wetness'}</Text>
+                </View>
+
+                {/* VPD */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="water-outline" size={20} color="#EA580C" />
+                  <Text style={[S.atmoVal, { color: (current.vapourPressureDeficit ?? 0) > 2 ? '#DC2626' : C.text }]}>
+                    {current.vapourPressureDeficit != null ? `${current.vapourPressureDeficit} kPa` : '—'}
+                  </Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'VPD (जल तनाव)' : 'VPD'}</Text>
+                </View>
+
+                {/* CAPE */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="flash-outline" size={20} color={(current.cape ?? 0) > 1000 ? '#DC2626' : '#818CF8'} />
+                  <Text style={[S.atmoVal, { color: (current.cape ?? 0) > 1000 ? '#DC2626' : C.text }]}>
+                    {current.cape != null ? `${current.cape} J/kg` : '—'}
+                  </Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'तूफ़ान तीव्रता' : 'CAPE'}</Text>
+                </View>
+
+                {/* Solar Radiation */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="sunny-outline" size={20} color="#FBBF24" />
+                  <Text style={S.atmoVal}>{current.solarRadiation != null ? `${current.solarRadiation} W/m²` : '—'}</Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'सौर विकिरण' : 'Solar Rad.'}</Text>
+                </View>
+
+                {/* Pressure */}
+                <View style={S.atmoItem}>
+                  <Ionicons name="speedometer-outline" size={20} color="#6B7280" />
+                  <Text style={S.atmoVal}>{current.pressure} hPa</Text>
+                  <Text style={S.atmoLabel}>{lang === 'hi' ? 'वायु दाब' : 'Pressure'}</Text>
+                </View>
+
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ══ 9. GROWING DEGREE DAYS ════════════════════════════════════════ */}
+        {daily?.some(d => d.growingDegreeDays != null) && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'फसल परिपक्वता ट्रैकर' : 'Crop Maturity Tracker'} />
+            <View style={S.card}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+                <Ionicons name="stats-chart-outline" size={16} color={C.green} />
+                <Text style={{ fontSize: 12, color: C.sub, marginLeft: 6, flex: 1 }}>
+                  {lang === 'hi'
+                    ? 'ग्रोइंग डिग्री डेज (GDD) — फसल के विकास का माप'
+                    : 'Growing Degree Days (GDD) — measures crop development rate'}
+                </Text>
+              </View>
+              {daily.slice(0, 7).map((d, i) => (
+                d.growingDegreeDays != null && (
+                  <View key={i} style={S.gddRow}>
+                    <Text style={S.gddDay}>{d.dateLabel}</Text>
+                    <View style={S.gddBarTrack}>
+                      <View style={[S.gddBarFill, {
+                        width: `${Math.min(100, (d.growingDegreeDays / 25) * 100)}%`,
+                        backgroundColor: d.growingDegreeDays > 20 ? '#16A34A' : d.growingDegreeDays > 10 ? '#F59E0B' : '#9CA3AF',
+                      }]} />
+                    </View>
+                    <Text style={S.gddVal}>{d.growingDegreeDays} GDD</Text>
+                  </View>
+                )
+              ))}
+              <Text style={{ fontSize: 9, color: C.sub, marginTop: 8, fontStyle: 'italic' }}>
+                {lang === 'hi' ? 'Base 0°C / Limit 50°C (Open-Meteo)' : 'Base 0°C / Limit 50°C (Open-Meteo)'}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* ══ 10. DAILY SUNSHINE + SOLAR ═══════════════════════════════════ */}
+        {daily?.some(d => d.sunshineDuration != null) && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'धूप और सौर ऊर्जा' : 'Sunshine & Solar'} />
+            <View style={S.card}>
+              {daily.slice(0, 7).map((d, i) => (
+                <View key={i} style={{ marginBottom: i < 6 ? 10 : 0 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '600', color: C.text }}>{d.dateLabel}</Text>
+                    <View style={{ flexDirection: 'row', gap: 12 }}>
+                      <Text style={{ fontSize: 11, color: '#F59E0B', fontWeight: '700' }}>
+                        ☀ {d.sunshineDuration != null ? `${d.sunshineDuration}h` : '—'}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: '#6B7280', fontWeight: '600' }}>
+                        {d.solarRadiationSum != null ? `${d.solarRadiationSum} MJ/m²` : ''}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={{ height: 5, backgroundColor: '#F1F5F9', borderRadius: 3, overflow: 'hidden' }}>
+                    <LinearGradient
+                      colors={['#FBBF24', '#FB923C']}
+                      start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                      style={{ height: 5, width: `${Math.min(100, ((d.sunshineDuration ?? 0) / 12) * 100)}%`, borderRadius: 3 }}
+                    />
+                  </View>
+                  {i < 6 && <View style={[S.divider, { marginTop: 10, marginBottom: 0 }]} />}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* ══ 11. RAIN BREAKDOWN ═══════════════════════════════════════════ */}
+        {daily?.some(d => d.rainSum > 0 || d.showersSum > 0) && (
+          <View style={S.section}>
+            <SectionHeader title={lang === 'hi' ? 'वर्षा विवरण' : 'Rain Breakdown'} />
+            <View style={S.card}>
+              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+                <Text style={{ flex: 2, fontSize: 10, fontWeight: '700', color: C.sub }}>DAY</Text>
+                <Text style={{ flex: 1, fontSize: 10, fontWeight: '700', color: '#3B82F6', textAlign: 'center' }}>STEADY</Text>
+                <Text style={{ flex: 1, fontSize: 10, fontWeight: '700', color: '#818CF8', textAlign: 'center' }}>SHOWERS</Text>
+                <Text style={{ flex: 1, fontSize: 10, fontWeight: '700', color: C.sub, textAlign: 'center' }}>HRS</Text>
+              </View>
+              <View style={[S.divider, { marginBottom: 8, marginTop: 0 }]} />
+              {daily.slice(0, 7).map((d, i) => (
+                <View key={i} style={{ flexDirection: 'row', marginBottom: 7, alignItems: 'center' }}>
+                  <Text style={{ flex: 2, fontSize: 12, color: C.text, fontWeight: '600' }}>{d.dateLabel}</Text>
+                  <Text style={{ flex: 1, fontSize: 12, color: '#3B82F6', fontWeight: '700', textAlign: 'center' }}>
+                    {d.rainSum > 0 ? `${d.rainSum}mm` : '—'}
+                  </Text>
+                  <Text style={{ flex: 1, fontSize: 12, color: '#818CF8', fontWeight: '700', textAlign: 'center' }}>
+                    {d.showersSum > 0 ? `${d.showersSum}mm` : '—'}
+                  </Text>
+                  <Text style={{ flex: 1, fontSize: 12, color: C.sub, textAlign: 'center' }}>
+                    {d.precipitationHours > 0 ? `${d.precipitationHours}h` : '—'}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* IMD source note */}
+        {weather.meta?.imdAvailable && (
+          <Text style={S.sourceNote}>
+            {lang === 'hi'
+              ? '⚡ IMD डेटा + Open-Meteo से संयुक्त पूर्वानुमान'
+              : '⚡ Combined forecast: Open-Meteo + IMD'}
+          </Text>
+        )}
+
+        <View style={{ height: 32 }} />
+      </ScrollView>
+    </Animated.View>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Styles
+// ═══════════════════════════════════════════════════════════════════════════════
+const S = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: C.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 14, backgroundColor: C.bg },
+  scroll: { paddingBottom: 16 },
+
+  // ── Header (standalone)
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingBottom: 12,
+    backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border,
+    elevation: 3, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4,
   },
-  navBtnGrad: {
+  headerCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
+  headerTitle:  { fontSize: 17, fontWeight: '800', color: C.text },
+
+  // ── Hero
+  hero: {
+    marginHorizontal: 16, marginTop: 14, marginBottom: 6,
+    borderRadius: 20, overflow: 'hidden', paddingTop: 20, paddingBottom: 18, paddingHorizontal: 20,
+    minHeight: 200,
+    shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 16, elevation: 8,
+  },
+  heroImg:      { borderRadius: 20 },
+  heroLocRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 6 },
+  heroLoc:      { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.82)', letterSpacing: 1.1 },
+  staleBadge:   { fontSize: 10, color: 'rgba(255,255,255,0.55)', fontStyle: 'italic' },
+  heroTemp:     { fontSize: 64, fontWeight: '900', color: '#FFFFFF', lineHeight: 70 },
+  heroCond:     { fontSize: 15, color: 'rgba(255,255,255,0.80)', marginTop: 2, marginBottom: 14 },
+  heroStats:    { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 0 },
+  heroStat:     { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  heroStatTxt:  { fontSize: 12, color: 'rgba(255,255,255,0.80)', fontWeight: '500' },
+  heroStatDivider: { width: 1, height: 12, backgroundColor: 'rgba(255,255,255,0.30)', marginHorizontal: 8 },
+  heroMinMax:   { marginTop: 10 },
+  heroMinMaxTxt:{ fontSize: 12, color: 'rgba(255,255,255,0.70)', fontWeight: '600' },
+
+  // ── IMD Alert banner
+  alertBanner: {
+    marginHorizontal: 16, marginTop: 10, marginBottom: 4,
+    borderRadius: 14, borderWidth: 1.5,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12,
+  },
+  alertBody:  { flex: 1 },
+  alertTitle: { fontSize: 13, fontWeight: '800', marginBottom: 2 },
+  alertDesc:  { fontSize: 11, color: C.sub, lineHeight: 15 },
+
+  // ── Section
+  section: { marginTop: 18, marginHorizontal: 16 },
+  sectionHeader: {
+    fontSize: 11, fontWeight: '900', color: C.sub,
+    letterSpacing: 1.3, textTransform: 'uppercase', marginBottom: 10,
+  },
+  card: {
+    backgroundColor: C.card, borderRadius: 16, padding: 14,
+    borderWidth: 1, borderColor: C.border,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+  },
+  divider: { height: 1, backgroundColor: C.border, marginVertical: 10 },
+
+  // ── Advisories
+  advisoryRow: { paddingRight: 4, gap: 10 },
+  advisoryCard: {
+    width: 160, borderRadius: 14, borderWidth: 1.5,
+    padding: 12, gap: 6,
+  },
+  advisoryTitle: { fontSize: 13, fontWeight: '800' },
+  advisoryDesc:  { fontSize: 11, color: C.sub, lineHeight: 15 },
+
+  // ── Hourly
+  hourlyRow: { paddingRight: 4, gap: 8 },
+  hourlyItem: {
+    alignItems: 'center', gap: 5,
+    paddingVertical: 10, paddingHorizontal: 10,
+    borderRadius: 14, backgroundColor: '#F4F6F4', minWidth: 58,
+  },
+  hourlyItemNow:  { backgroundColor: C.green },
+  hourlyTime:     { fontSize: 10, fontWeight: '700', color: C.sub },
+  hourlyTimeNow:  { color: 'rgba(255,255,255,0.80)' },
+  hourlyTemp:     { fontSize: 14, fontWeight: '800', color: C.text },
+  hourlyTempNow:  { color: '#FFFFFF' },
+  rainRow:        { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  rainPct:        { fontSize: 9, color: '#3B82F6', fontWeight: '600' },
+
+  // ── Daily
+  dailyRow:      { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
+  dailyRowToday: { backgroundColor: 'rgba(27,94,32,0.05)', borderRadius: 10, paddingHorizontal: 6 },
+  dailyDay:      { width: 72, fontSize: 13, fontWeight: '600', color: C.sub },
+  dailyDayToday: { color: C.green, fontWeight: '800' },
+  dailyTempWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dailyLow:      { fontSize: 12, color: C.sub, fontWeight: '500', width: 28, textAlign: 'right' },
+  dailyHigh:     { fontSize: 13, fontWeight: '800', color: C.text, width: 28 },
+  dailyBar:      { flex: 1, height: 5, backgroundColor: '#E5E7EB', borderRadius: 3, overflow: 'hidden' },
+  dailyBarFill:  { height: 5, backgroundColor: C.greenLight, borderRadius: 3 },
+  dailyRainBadge:{ flexDirection: 'row', alignItems: 'center', gap: 2, width: 36 },
+  dailyRainPct:  { fontSize: 10, color: '#3B82F6', fontWeight: '600' },
+
+  // ── Soil dashboard
+  soilGroupLabel: { fontSize: 11, fontWeight: '700', color: C.sub, letterSpacing: 0.8, marginBottom: 8, textTransform: 'uppercase' },
+  soilTempRow:    { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 7 },
+  soilTempLabel:  { flex: 1, fontSize: 12, color: C.sub },
+  soilTempVal:    { fontSize: 14, fontWeight: '700', color: C.text },
+
+  moistureRow:   { marginBottom: 10 },
+  moistureLabel: { fontSize: 12, color: C.sub, marginBottom: 5 },
+  moistureTrack: { height: 8, backgroundColor: '#E5E7EB', borderRadius: 4, overflow: 'hidden', marginBottom: 3 },
+  moistureFill:  { height: 8, borderRadius: 4 },
+  moistureVal:   { fontSize: 11, fontWeight: '700' },
+
+  etRow:   { flexDirection: 'row', alignItems: 'flex-start', gap: 0 },
+  etLabel: { fontSize: 12, fontWeight: '700', color: C.text },
+  etSub:   { fontSize: 10, color: C.sub, marginTop: 1 },
+  etVal:   { fontSize: 14, fontWeight: '800', color: C.green },
+
+  // ── Weather alerts section
+  alertsHeader: {
     flexDirection: 'row', alignItems: 'center',
-    gap: 14, padding: 18,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.07)',
+    justifyContent: 'space-between', marginBottom: 10,
   },
-  navBtnIcon: {
-    width: 52, height: 52, borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    justifyContent: 'center', alignItems: 'center',
+  alertCountBadge: {
+    backgroundColor: '#DC2626', borderRadius: 10,
+    paddingHorizontal: 7, paddingVertical: 2,
   },
-  navBtnTitle: { fontSize: 16, fontWeight: '800', color: '#fff' },
-  navBtnSub:   { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 3 },
+  alertCountTxt: { fontSize: 11, fontWeight: '800', color: '#fff' },
+
+  allClearCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#F0FDF4', borderRadius: 14,
+    borderWidth: 1.5, borderColor: '#16A34A',
+    padding: 14,
+  },
+  allClearTitle: { fontSize: 14, fontWeight: '800', color: '#15803D', marginBottom: 2 },
+  allClearDesc:  { fontSize: 12, color: '#166534', lineHeight: 17 },
+
+  alertCard: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    borderRadius: 14, borderWidth: 1.5,
+    marginBottom: 10, overflow: 'hidden',
+    paddingRight: 12, paddingVertical: 12,
+  },
+  alertBar:  { width: 4, alignSelf: 'stretch', marginRight: 10 },
+  alertIcon: {
+    width: 38, height: 38, borderRadius: 10,
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 10,
+  },
+  alertCardTitle: { fontSize: 13, fontWeight: '800' },
+  alertDayTxt:   { fontSize: 10, color: C.sub, fontWeight: '600', marginBottom: 4 },
+  alertCardDesc: { fontSize: 11, color: C.sub, lineHeight: 16 },
+  severityBadge: { borderRadius: 5, paddingHorizontal: 5, paddingVertical: 1 },
+  severityTxt:   { fontSize: 9, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
+
+  // ── Sun arc
+  arcWrap: { alignItems: 'center', paddingVertical: 10, paddingHorizontal: 4 },
+
+  // ── Atmosphere grid
+  atmoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  atmoItem: {
+    width: (W - 64 - 10) / 2 - 5,
+    backgroundColor: '#F8FAFC', borderRadius: 12,
+    padding: 12, alignItems: 'center', gap: 4,
+    borderWidth: 1, borderColor: C.border,
+  },
+  atmoVal:   { fontSize: 15, fontWeight: '900', color: C.text },
+  atmoLabel: { fontSize: 10, color: C.sub, fontWeight: '600', textAlign: 'center' },
+
+  // ── GDD tracker
+  gddRow:      { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+  gddDay:      { width: 60, fontSize: 11, fontWeight: '600', color: C.sub },
+  gddBarTrack: { flex: 1, height: 6, backgroundColor: '#F1F5F9', borderRadius: 3, overflow: 'hidden', marginHorizontal: 8 },
+  gddBarFill:  { height: 6, borderRadius: 3 },
+  gddVal:      { width: 60, fontSize: 11, fontWeight: '700', color: C.text, textAlign: 'right' },
+
+  // ── Source note
+  sourceNote: {
+    fontSize: 10, color: C.sub, textAlign: 'center',
+    marginTop: 16, fontStyle: 'italic',
+  },
+
+  // ── Loading / Error
+  loadTxt:  { fontSize: 14, color: C.sub, marginTop: 10 },
+  errTxt:   { fontSize: 14, color: '#EF4444', textAlign: 'center', paddingHorizontal: 40 },
+  errSub:   { fontSize: 12, color: C.sub, textAlign: 'center', lineHeight: 20, marginTop: 4 },
+  retryBtn: { backgroundColor: C.green, borderRadius: 12, paddingHorizontal: 28, paddingVertical: 12, marginTop: 10 },
+  retryTxt: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
 });

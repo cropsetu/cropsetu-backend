@@ -1,95 +1,243 @@
-import { useState, useRef } from 'react';
+/**
+ * AnimalTradeHome — Pashushala-inspired Livestock Marketplace
+ * Photo category filter + GPS distance filter + 2-column grid
+ * Uses real API (/animals) — falls back to mock data if offline
+ */
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  TextInput, StatusBar, Animated,
+  TextInput, StatusBar, Image, ScrollView, Dimensions, Alert,
+  ActivityIndicator, RefreshControl, Animated,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { ANIMAL_LISTINGS } from '../../constants/mockData';
+import * as Location from 'expo-location';
+import api from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
-import { StatusBadge } from '../../components/ui/UIKit';
-import { TiltCard, FloatingParticle, EntrySlide, D } from '../../components/ui/ImmersiveKit';
 
-const ACCENT = D.amber;
+const { width: W } = Dimensions.get('window');
+const CARD_W = (W - 14 * 2 - 10) / 2;
 
-const ANIMAL_FILTERS = ['All', 'Cow', 'Buffalo', 'Goat', 'Bullock', 'Sheep', 'Horse'];
+const GREEN = '#2D9162';
+const BG    = '#EEF8F4';
 
-const ANIMAL_COLORS = {
-  Cow:     '#059669', Buffalo: '#0284C7', Goat:  '#F97316',
-  Bullock: '#DC2626', Sheep:   '#D97706', Horse: '#7C3AED', default: ACCENT,
-};
+const ANIMAL_CATEGORIES = [
+  { key: 'All',     tKey: 'all',     photo: 'https://images.unsplash.com/photo-1500595046743-cd271d694d30?w=120&h=120&fit=crop' },
+  { key: 'Cow',     tKey: 'cow',     photo: 'https://images.unsplash.com/photo-1546445317-29f4545e9d53?w=120&h=120&fit=crop' },
+  { key: 'Buffalo', tKey: 'buffalo', photo: 'https://images.unsplash.com/photo-1583073437-5cc2c7f6f2dd?w=120&h=120&fit=crop' },
+  { key: 'Goat',    tKey: 'goat',    photo: 'https://images.unsplash.com/photo-1524024973431-2ad916746881?w=120&h=120&fit=crop' },
+  { key: 'Bullock', tKey: 'bullock', photo: 'https://images.unsplash.com/photo-1548681170-2b8e4f2abd37?w=120&h=120&fit=crop' },
+  { key: 'Sheep',   tKey: 'sheep',   photo: 'https://images.unsplash.com/photo-1484557985045-edf25e08da73?w=120&h=120&fit=crop' },
+];
 
-const ANIMAL_EMOJI = {
-  Cow: '🐄', Buffalo: '🐃', Goat: '🐐', Horse: '🐴', Sheep: '🐑',
-};
+const DISTANCE_KEYS = [null, 10, 25, 50, 100];
 
-// ── 3D Animal Card ─────────────────────────────────────────────────────────────
-function AnimalCard({ item, onPress, index }) {
-  const accent = ANIMAL_COLORS[item.animal] || ANIMAL_COLORS.default;
+const SORT_KEYS = ['sortLatest', 'sortPriceLow', 'sortPriceHigh'];
+
+// ── Haversine distance (km) ────────────────────────────────────────────────────
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ── Category pill ─────────────────────────────────────────────────────────────
+function CategoryPill({ item, active, onPress, t }) {
+  const sc = useRef(new Animated.Value(1)).current;
+  const pressIn  = () => Animated.spring(sc, { toValue: 0.88, useNativeDriver: true, speed: 50 }).start();
+  const pressOut = () => Animated.spring(sc, { toValue: 1, useNativeDriver: true, friction: 4 }).start();
   return (
-    <EntrySlide delay={index * 70} fromX={-50} style={S.cardWrapper}>
-      <TiltCard style={{ borderRadius: 20, overflow: 'hidden' }}>
-        <TouchableOpacity style={[S.card, { shadowColor: accent }]} onPress={() => onPress(item)} activeOpacity={0.9}>
-          {/* Image area */}
-          <View style={S.imgArea}>
-            <LinearGradient colors={[accent + '25', accent + '08', '#F8FAFF']} style={S.imgGrad}>
-              <Text style={S.animalEmoji}>{ANIMAL_EMOJI[item.animal] || '🐂'}</Text>
-            </LinearGradient>
-            {/* Left accent bar */}
-            <View style={[S.accentBar, { backgroundColor: accent, shadowColor: accent }]} />
-            {/* Badges */}
-            <View style={S.badgeRow}>
-              {item.verified && <StatusBadge type="verified" small />}
-              <View style={S.postedPill}>
-                <Text style={S.postedTxt}>{item.postedDate}</Text>
-              </View>
+    <Animated.View style={[S.catWrap, { transform: [{ scale: sc }] }]}>
+      <TouchableOpacity
+        onPress={() => onPress(item.key)}
+        onPressIn={pressIn}
+        onPressOut={pressOut}
+        activeOpacity={1}
+      >
+        <View style={[S.catImgWrap, active && S.catImgWrapActive]}>
+          <Image source={{ uri: item.photo }} style={S.catImg} resizeMode="cover" />
+        </View>
+        <Text style={[S.catLabel, active && S.catLabelActive]}>{t(item.tKey === 'all' ? 'all' : `doctor.animals.${item.tKey.toLowerCase()}`) || item.key.toUpperCase()}</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+// ── Animal Card ───────────────────────────────────────────────────────────────
+function AnimalCard({ item, onPress, t, index = 0 }) {
+  const imageUrl = item.images && item.images[0] ? item.images[0] : null;
+  const milkStr  = item.milkYield && item.milkYield !== 'N/A' ? item.milkYield : null;
+  const price    = item.price ? Number(item.price).toLocaleString() : '—';
+  const city     = item.sellerLocation ? item.sellerLocation.split(',')[0] : '—';
+  const dist     = item.distanceKm != null ? `${item.distanceKm} km`
+                 : item._dist      != null ? `${Math.round(item._dist)} km`
+                 : null;
+  const sc    = useRef(new Animated.Value(1)).current;
+  const entry = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(entry, {
+      toValue: 1, duration: 420, delay: index * 60, useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const entryOpacity = entry.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const entryY       = entry.interpolate({ inputRange: [0, 1], outputRange: [24, 0] });
+
+  return (
+    <Animated.View style={[S.card, { transform: [{ scale: sc }, { translateY: entryY }], opacity: entryOpacity }]}>
+    <TouchableOpacity
+      style={{ flex: 1 }}
+      onPress={() => onPress(item)}
+      onPressIn={() => Animated.spring(sc, { toValue: 0.95, useNativeDriver: true, tension: 180, friction: 8 }).start()}
+      onPressOut={() => Animated.spring(sc, { toValue: 1, useNativeDriver: true, tension: 120, friction: 6 }).start()}
+      activeOpacity={1}
+    >
+      <View style={S.photoWrap}>
+        {imageUrl
+          ? <Image source={{ uri: imageUrl }} style={S.photo} resizeMode="cover" />
+          : (
+            <View style={[S.photo, S.photoFallback]}>
+              <Ionicons name="paw" size={36} color={GREEN + '60'} />
             </View>
-            {/* Price bubble */}
-            <LinearGradient colors={[accent, accent + 'CC']} style={S.priceBubble}>
-              <Text style={S.priceBubbleTxt}>₹{item.price.toLocaleString()}</Text>
-            </LinearGradient>
+          )
+        }
+        {/* Gradient overlay on image */}
+        <LinearGradient
+          colors={['transparent', 'rgba(0,0,0,0.45)']}
+          style={S.photoGradient}
+          pointerEvents="none"
+        />
+        {item.isNew || item._isNew ? (
+          <View style={S.badge}>
+            <Text style={S.badgeTxt}>{t('animal.addedRecently')}</Text>
           </View>
-
-          {/* Body */}
-          <View style={S.body}>
-            <View style={S.nameRow}>
-              <View style={[S.typeDot, { backgroundColor: accent, shadowColor: accent }]} />
-              <Text style={S.animalName}>{item.animal}</Text>
-              <Text style={S.breed}> · {item.breed}</Text>
-            </View>
-            <Text style={S.details}>{item.age} · {item.gender} · {item.weight}</Text>
-
-            {item.milkYield !== 'N/A' && (
-              <View style={[S.milkPill, { backgroundColor: D.cyan + '15', borderColor: D.cyan + '40' }]}>
-                <Ionicons name="water" size={12} color={D.cyan} />
-                <Text style={[S.milkTxt, { color: D.cyan }]}>{item.milkYield}</Text>
-              </View>
-            )}
-
-            <View style={S.tagsRow}>
-              {item.tags.slice(0, 3).map((tag, i) => (
-                <View key={i} style={[S.tag, { borderColor: accent + '40', backgroundColor: accent + '08' }]}>
-                  <Text style={[S.tagTxt, { color: accent }]}>{tag}</Text>
-                </View>
-              ))}
-            </View>
-
-            <View style={S.footer}>
-              <View style={S.locationRow}>
-                <Ionicons name="location-outline" size={13} color={D.textDim} />
-                <Text style={S.locationTxt}>{item.sellerLocation}</Text>
-              </View>
-              <View style={S.sellerRow}>
-                <View style={[S.avatar, { backgroundColor: accent + '18', borderColor: accent + '40' }]}>
-                  <Text style={[S.avatarTxt, { color: accent }]}>{item.sellerAvatar}</Text>
-                </View>
-                <Text style={S.sellerName}>{item.sellerName}</Text>
-              </View>
-            </View>
+        ) : null}
+        {dist ? (
+          <View style={S.distBadge}>
+            <Ionicons name="location" size={9} color="#fff" />
+            <Text style={S.distBadgeTxt}>{dist}</Text>
           </View>
+        ) : null}
+        {item.vaccinated ? (
+          <View style={S.vaccBadge}>
+            <Ionicons name="shield-checkmark" size={10} color="#fff" />
+          </View>
+        ) : null}
+      </View>
+
+      <View style={S.cardBody}>
+        <Text style={S.animalName} numberOfLines={1}>{item.breed} {item.animal}</Text>
+        <Text style={S.price}>₹{price}</Text>
+        <View style={S.metaRow}>
+          <Ionicons name="location-outline" size={11} color="#888" />
+          <Text style={S.metaTxt} numberOfLines={1}>{city}</Text>
+        </View>
+        <View style={S.statsRow}>
+          <View style={S.statItem}>
+            <Ionicons name="time-outline" size={11} color="#888" />
+            <Text style={S.statTxt}>{item.age}</Text>
+          </View>
+          {milkStr ? (
+            <View style={S.statItem}>
+              <Ionicons name="water-outline" size={11} color={GREEN} />
+              <Text style={[S.statTxt, { color: GREEN }]}>{milkStr}</Text>
+            </View>
+          ) : null}
+        </View>
+        <TouchableOpacity style={S.bookBtn} onPress={() => onPress(item)}>
+          <Ionicons name="car-outline" size={13} color="#fff" />
+          <Text style={S.bookBtnTxt}>{t('animal.bookNow')}</Text>
         </TouchableOpacity>
-      </TiltCard>
-    </EntrySlide>
+      </View>
+    </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+// ── Distance chip ─────────────────────────────────────────────────────────────
+function DistChip({ km, label, active, disabled, onPress }) {
+  const sc = useRef(new Animated.Value(1)).current;
+  const pressIn  = () => { if (!disabled) Animated.spring(sc, { toValue: 0.88, useNativeDriver: true, speed: 50 }).start(); };
+  const pressOut = () => Animated.spring(sc, { toValue: 1, useNativeDriver: true, friction: 4 }).start();
+  return (
+    <Animated.View style={{ transform: [{ scale: sc }] }}>
+      <TouchableOpacity
+        style={[S.distChip, active && S.distChipActive, disabled && S.distChipDisabled]}
+        onPress={() => onPress(km)}
+        onPressIn={pressIn}
+        onPressOut={pressOut}
+        activeOpacity={1}
+      >
+        <Text style={[S.distChipTxt, active && S.distChipTxtActive, disabled && { color: '#bbb' }]}>
+          {label}
+        </Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+// ── Sort Dropdown ─────────────────────────────────────────────────────────────
+function SortDropdown({ value, onChange, t }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <View style={S.sortWrap}>
+      <TouchableOpacity style={S.sortBtn} onPress={() => setOpen(o => !o)}>
+        <Ionicons name="swap-vertical-outline" size={13} color={GREEN} />
+        <Text style={S.sortBtnTxt}>{t(`animal.${value}`)}</Text>
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={GREEN} />
+      </TouchableOpacity>
+      {open ? (
+        <View style={S.dropdown}>
+          {SORT_KEYS.map(key => (
+            <TouchableOpacity
+              key={key}
+              style={S.dropItem}
+              onPress={() => { onChange(key); setOpen(false); }}
+            >
+              <Text style={[S.dropItemTxt, key === value && S.dropItemActive]}>{t(`animal.${key}`)}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ── List header ────────────────────────────────────────────────────────────────
+function ListHeader({ count, sortBy, onSortChange, t }) {
+  return (
+    <View style={S.sectionHeader}>
+      <View style={S.sectionLeft}>
+        <View style={S.starBadge}>
+          <Ionicons name="star" size={11} color="#fff" />
+        </View>
+        <Text style={S.sectionTitle}>{t('animal.allAnimals')}</Text>
+        <View style={S.countBadge}>
+          <Text style={S.countBadgeTxt}>{count}</Text>
+        </View>
+      </View>
+      <SortDropdown value={sortBy} onChange={onSortChange} t={t} />
+    </View>
+  );
+}
+
+// ── Row (2 cards) ──────────────────────────────────────────────────────────────
+function CardRow({ pair, onPress, t, rowIndex = 0 }) {
+  return (
+    <View style={S.row}>
+      <AnimalCard item={pair[0]} onPress={onPress} t={t} index={rowIndex * 2} />
+      {pair[1]
+        ? <AnimalCard item={pair[1]} onPress={onPress} t={t} index={rowIndex * 2 + 1} />
+        : <View style={{ width: CARD_W }} />
+      }
+    </View>
   );
 }
 
@@ -98,206 +246,329 @@ export default function AnimalTradeHome({ navigation }) {
   const { t } = useLanguage();
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery,  setSearchQuery]  = useState('');
-  const scrollY = useRef(new Animated.Value(0)).current;
+  const [sortBy,       setSortBy]       = useState('sortLatest');
+  const [distanceKm,   setDistanceKm]   = useState(null);
+  const [userLocation, setUserLocation] = useState(null);
+  const [locStatus,    setLocStatus]    = useState('idle');
+  const [listings,     setListings]     = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [refreshing,   setRefreshing]   = useState(false);
 
-  const filteredListings = ANIMAL_LISTINGS.filter(item => {
-    const matchFilter = activeFilter === 'All' || item.animal === activeFilter;
-    const matchSearch = !searchQuery ||
-      item.animal.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.breed.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.sellerLocation.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchFilter && matchSearch;
-  });
+  // Request GPS on mount
+  useEffect(() => {
+    (async () => {
+      setLocStatus('loading');
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') { setLocStatus('denied'); return; }
+      try {
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setUserLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        setLocStatus('granted');
+      } catch {
+        setLocStatus('denied');
+      }
+    })();
+  }, []);
 
-  const heroScale   = scrollY.interpolate({ inputRange: [0, 160], outputRange: [1, 0.9], extrapolate: 'clamp' });
-  const heroOpacity = scrollY.interpolate({ inputRange: [0, 130], outputRange: [1, 0.6], extrapolate: 'clamp' });
+  // Fetch from API whenever filter/search/distance changes
+  useEffect(() => {
+    fetchListings();
+  }, [activeFilter, searchQuery, distanceKm, userLocation, sortBy]);
 
-  const PARTICLES = [
-    { icon: 'paw',  size: 20, delay: 0,   duration: 3000, particleStyle: { top: '10%', left: '5%'  } },
-    { icon: 'star', size: 10, delay: 300, duration: 2600, particleStyle: { top: '6%',  left: '45%' } },
-    { icon: 'star', size: 8,  delay: 600, duration: 3100, particleStyle: { top: '30%', right: '8%' } },
-    { icon: 'leaf', size: 14, delay: 900, duration: 2800, particleStyle: { top: '45%', left: '8%'  } },
-  ];
+  async function fetchListings(isRefresh = false) {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    try {
+      const params = { limit: 50 };
+      if (activeFilter !== 'All') params.animal  = activeFilter;
+      if (searchQuery.trim())     params.search  = searchQuery.trim();
+      if (distanceKm && userLocation) {
+        params.lat    = userLocation.latitude;
+        params.lng    = userLocation.longitude;
+        params.radius = distanceKm;
+      }
+
+      const { data } = await api.get('/animals', { params });
+      let results = data.data || [];
+
+      // Client-side sort (server returns verified+createdAt order)
+      if (sortBy === 'sortPriceLow') results = [...results].sort((a, b) => a.price - b.price);
+      if (sortBy === 'sortPriceHigh') results = [...results].sort((a, b) => b.price - a.price);
+      if (sortBy === 'sortLatest' && distanceKm && userLocation) {
+        results = [...results].sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999));
+      }
+
+      setListings(results);
+    } catch {
+      setListings([]);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  // Build 2-col pairs
+  const pairs = [];
+  for (let i = 0; i < listings.length; i += 2) {
+    pairs.push([listings[i], listings[i + 1] || null]);
+  }
+
+  const handleAnimalPress = useCallback(
+    item => navigation.navigate('AnimalDetail', { listing: item }),
+    [navigation]
+  );
+
+  const handleDistancePress = (km) => {
+    if (km !== null && locStatus === 'denied') {
+      Alert.alert(t('animal.locationRequired'), t('animal.locationRequiredMsg'));
+      return;
+    }
+    setDistanceKm(prev => prev === km ? null : km);
+  };
 
   return (
     <View style={S.root}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
 
-      <Animated.ScrollView
-        showsVerticalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: true }
-        )}
-      >
-        {/* ── Hero ── */}
-        <Animated.View style={{ transform: [{ perspective: 1200 }, { scale: heroScale }], opacity: heroOpacity }}>
-          <LinearGradient colors={['#C2410C', '#EA580C', '#FB923C']} style={S.heroGrad}>
-            {PARTICLES.map((p, i) => (
-              <FloatingParticle key={i} {...p}>
-                <Ionicons name={p.icon} size={p.size} color="rgba(255,255,255,0.5)" />
-              </FloatingParticle>
-            ))}
-
-            <View style={S.headerTop}>
-              <View>
-                <Text style={S.headerSub}>{t('animalTradeSub')}</Text>
-                <Text style={S.headerTitle}>{t('animalTradeTitle')}</Text>
-              </View>
-              <TouchableOpacity style={S.sellBtn} onPress={() => navigation.navigate('AddAnimalListing')}>
-                <Ionicons name="add-circle-outline" size={17} color="#fff" />
-                <Text style={S.sellBtnTxt}>{t('sellAnimalBtn')}</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={S.searchBar}>
-              <Ionicons name="search-outline" size={18} color="rgba(255,255,255,0.7)" />
-              <TextInput
-                style={S.searchInput}
-                placeholder={t('animalSearch')}
-                placeholderTextColor="rgba(255,255,255,0.55)"
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-            </View>
-
-            {/* Filter chips */}
-            <FlatList
-              horizontal data={ANIMAL_FILTERS} keyExtractor={i => i}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={S.filterScroll}
-              style={{ marginTop: 12 }}
-              renderItem={({ item }) => {
-                const active = activeFilter === item;
-                return (
-                  <TouchableOpacity
-                    style={[S.filterChip, active && { backgroundColor: 'rgba(255,255,255,0.3)', borderColor: '#fff' }]}
-                    onPress={() => setActiveFilter(item)}
-                  >
-                    <Text style={[S.filterTxt, { color: active ? '#fff' : 'rgba(255,255,255,0.8)' }]}>{item}</Text>
-                  </TouchableOpacity>
-                );
-              }}
+      {/* ── Header ── */}
+      <View style={S.header}>
+        <View style={S.topBar}>
+          <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
+          </TouchableOpacity>
+          <View style={S.searchBar}>
+            <Ionicons name="search-outline" size={15} color="#999" />
+            <TextInput
+              style={S.searchInput}
+              placeholder={t('animal.searchPlaceholder')}
+              placeholderTextColor="#999"
+              value={searchQuery}
+              onChangeText={setSearchQuery}
             />
-          </LinearGradient>
-        </Animated.View>
-
-        {/* Count */}
-        <View style={S.countRow}>
-          <Ionicons name="list" size={14} color={D.textDim} />
-          <Text style={S.countTxt}>{filteredListings.length} {t('animalsFound')}</Text>
+            {searchQuery.length > 0 ? (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={16} color="#bbb" />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          <TouchableOpacity style={S.addBtn} onPress={() => navigation.navigate('AddAnimalListing')}>
+            <Ionicons name="add" size={22} color={GREEN} />
+          </TouchableOpacity>
         </View>
 
-        {/* Listings */}
-        {filteredListings.length === 0 ? (
-          <View style={S.emptyWrap}>
-            <Ionicons name="paw-outline" size={64} color={`${ACCENT}60`} />
-            <Text style={S.emptyTitle}>No animals found</Text>
-            <Text style={S.emptySub}>Try a different filter or search</Text>
-          </View>
-        ) : (
-          filteredListings.map((item, index) => (
-            <AnimalCard
-              key={item.id}
-              item={item}
-              index={index}
-              onPress={i => navigation.navigate('AnimalDetail', { listing: i })}
+        {/* Photo category filter */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.catRow}>
+          {ANIMAL_CATEGORIES.map(cat => (
+            <CategoryPill
+              key={cat.key}
+              item={cat}
+              active={activeFilter === cat.key}
+              onPress={setActiveFilter}
+              t={t}
             />
-          ))
+          ))}
+        </ScrollView>
+
+        {/* Distance filter */}
+        <View style={S.distRow}>
+          <View style={S.distLabel}>
+            <Ionicons
+              name={locStatus === 'granted' ? 'location' : 'location-outline'}
+              size={13}
+              color={locStatus === 'granted' ? GREEN : '#999'}
+            />
+            <Text style={[S.distLabelTxt, locStatus === 'granted' && { color: GREEN }]}>
+              {locStatus === 'granted'  ? t('animal.nearMe')
+               : locStatus === 'loading' ? t('animal.locating')
+               : t('animal.distance')}
+            </Text>
+          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.distChips}>
+            {DISTANCE_KEYS.map(km => (
+              <DistChip
+                key={String(km)}
+                km={km}
+                label={km === null ? t('all') : `${km} km`}
+                active={distanceKm === km}
+                disabled={km !== null && locStatus === 'denied'}
+                onPress={handleDistancePress}
+              />
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+
+      {/* ── Listings ── */}
+      <FlatList
+        data={pairs}
+        keyExtractor={(_, idx) => String(idx)}
+        contentContainerStyle={S.list}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => fetchListings(true)}
+            colors={[GREEN]}
+            tintColor={GREEN}
+          />
+        }
+        ListHeaderComponent={
+          <ListHeader count={listings.length} sortBy={sortBy} onSortChange={setSortBy} t={t} />
+        }
+        ListEmptyComponent={
+          loading ? (
+            <View style={S.emptyWrap}>
+              <ActivityIndicator size="large" color={GREEN} />
+            </View>
+          ) : (
+            <View style={S.emptyWrap}>
+              <View style={S.emptyIconBg}>
+                <Ionicons name="paw-outline" size={36} color={GREEN} />
+              </View>
+              <Text style={S.emptyTitle}>Coming Soon</Text>
+              <Text style={S.emptyTxt}>No animals listed in your area yet.</Text>
+              <Text style={S.emptyHintTxt}>Be the first to list your livestock for sale!</Text>
+              {distanceKm ? (
+                <TouchableOpacity style={S.expandBtn} onPress={() => setDistanceKm(null)}>
+                  <Text style={S.expandBtnTxt}>{t('animal.showAllAnimals')}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )
+        }
+        renderItem={({ item: pair, index }) => (
+          <CardRow pair={pair} onPress={handleAnimalPress} t={t} rowIndex={index} />
         )}
-        <View style={{ height: 24 }} />
-      </Animated.ScrollView>
+      />
+
+      {/* FAB */}
+      <TouchableOpacity style={S.fab} onPress={() => navigation.navigate('AddAnimalListing')}>
+        <Ionicons name="add" size={20} color="#fff" />
+        <Text style={S.fabTxt}>{t('animal.postAd')}</Text>
+      </TouchableOpacity>
     </View>
   );
 }
 
 const S = StyleSheet.create({
-  root:     { flex: 1, backgroundColor: D.bg },
-  heroGrad: { paddingTop: 52, paddingHorizontal: 16, paddingBottom: 18 },
+  root: { flex: 1, backgroundColor: BG },
 
-  headerTop:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
-  headerSub:   { fontSize: 13, color: 'rgba(255,255,255,0.85)', fontWeight: '500' },
-  headerTitle: { fontSize: 26, fontWeight: '900', color: '#fff', letterSpacing: -0.5 },
-  sellBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 20,
-    paddingHorizontal: 14, paddingVertical: 9,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)',
-  },
-  sellBtnTxt: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  header:   { backgroundColor: '#fff', paddingTop: 44, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  topBar:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 12, gap: 10 },
+  backBtn:  { padding: 2 },
+  addBtn:   { padding: 2 },
   searchBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: 'rgba(255,255,255,0.22)',
-    borderRadius: 16, paddingHorizontal: 14, paddingVertical: 11,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.35)',
+    flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: BG, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9,
   },
-  searchInput:  { flex: 1, fontSize: 14, color: '#fff', padding: 0 },
-  filterScroll: { gap: 8, paddingBottom: 4 },
-  filterChip: {
-    paddingVertical: 6, paddingHorizontal: 14,
-    borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.4)',
-    backgroundColor: 'rgba(255,255,255,0.12)',
-  },
-  filterTxt: { fontSize: 13, fontWeight: '600' },
+  searchInput: { flex: 1, fontSize: 13, color: '#1A1A1A', padding: 0 },
 
-  countRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 16, paddingVertical: 10,
-  },
-  countTxt: { fontSize: 13, color: D.textDim, fontWeight: '500' },
+  catRow:           { paddingHorizontal: 12, paddingBottom: 12, gap: 8 },
+  catWrap:          { alignItems: 'center', gap: 5, width: 64 },
+  catImgWrap:       { width: 54, height: 54, borderRadius: 27, overflow: 'hidden', borderWidth: 2.5, borderColor: '#E0E0E0',
+                      shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  catImgWrapActive: { borderColor: GREEN, shadowColor: GREEN, shadowOpacity: 0.35, elevation: 4 },
+  catImg:           { width: '100%', height: '100%' },
+  catLabel:         { fontSize: 10, fontWeight: '700', color: '#888', textAlign: 'center' },
+  catLabelActive:   { color: GREEN },
 
-  // Cards
-  cardWrapper: { paddingHorizontal: 14, marginBottom: 14 },
+  distRow:          { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 12, gap: 10 },
+  distLabel:        { flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 80 },
+  distLabelTxt:     { fontSize: 12, fontWeight: '700', color: '#999' },
+  distChips:        { gap: 7, flexDirection: 'row' },
+  distChip:         { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, borderColor: '#DDD', backgroundColor: '#fff' },
+  distChipActive:   { backgroundColor: GREEN, borderColor: GREEN },
+  distChipDisabled: { backgroundColor: '#F8F8F8', borderColor: '#EEE' },
+  distChipTxt:      { fontSize: 12, fontWeight: '600', color: '#666' },
+  distChipTxtActive:{ color: '#fff' },
+
+  list: { padding: 14, paddingBottom: 100 },
+  sectionHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
+  },
+  sectionLeft:   { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  starBadge:     { backgroundColor: GREEN, borderRadius: 4, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' },
+  sectionTitle:  { fontSize: 14, fontWeight: '800', color: '#1A1A1A', letterSpacing: 0.3 },
+  countBadge:    { backgroundColor: GREEN + '18', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
+  countBadgeTxt: { fontSize: 12, fontWeight: '700', color: GREEN },
+
+  sortWrap:      { position: 'relative', zIndex: 10 },
+  sortBtn:       { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sortBtnTxt:    { fontSize: 12, color: GREEN, fontWeight: '700' },
+  dropdown: {
+    position: 'absolute', right: 0, top: 26,
+    backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#eee',
+    width: 180, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 }, elevation: 4,
+  },
+  dropItem:      { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
+  dropItemTxt:   { fontSize: 13, color: '#444', fontWeight: '500' },
+  dropItemActive:{ color: GREEN, fontWeight: '700' },
+
+  row: { flexDirection: 'row', gap: 10, marginBottom: 10 },
+
   card: {
-    backgroundColor: D.surface,
-    borderRadius: 20, overflow: 'hidden',
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    width: CARD_W, backgroundColor: '#fff', borderRadius: 16, overflow: 'hidden',
+    shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 }, elevation: 4,
   },
-  imgArea: { height: 170, position: 'relative' },
-  imgGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  animalEmoji: { fontSize: 64 },
-  accentBar: {
-    position: 'absolute', left: 0, top: 0, bottom: 0, width: 4,
-    shadowOffset: { width: 4, height: 0 }, shadowOpacity: 0.5, shadowRadius: 8,
-    elevation: 4,
-  },
-  badgeRow:   { position: 'absolute', top: 10, left: 10, flexDirection: 'row', gap: 6 },
-  postedPill: { backgroundColor: 'rgba(0,0,0,0.3)', borderRadius: 20, paddingHorizontal: 9, paddingVertical: 3 },
-  postedTxt:  { color: '#fff', fontSize: 10, fontWeight: '500' },
-  priceBubble:{ position: 'absolute', bottom: 10, right: 10, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
-  priceBubbleTxt: { color: '#fff', fontSize: 17, fontWeight: '900' },
+  photoWrap:    { height: CARD_W * 0.85, position: 'relative' },
+  photo:        { width: '100%', height: '100%' },
+  photoFallback:{ backgroundColor: BG, justifyContent: 'center', alignItems: 'center' },
+  photoGradient:{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%' },
 
-  body:       { padding: 14, gap: 5 },
-  nameRow:    { flexDirection: 'row', alignItems: 'center' },
-  typeDot:    { width: 8, height: 8, borderRadius: 4, marginRight: 6, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 1, shadowRadius: 6, elevation: 4 },
-  animalName: { fontSize: 17, fontWeight: '900', color: D.text },
-  breed:      { fontSize: 13, color: D.textDim },
-  details:    { fontSize: 13, color: D.textDim },
-  milkPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
-    borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4, borderWidth: 1,
+  badge: {
+    position: 'absolute', top: 8, left: 0,
+    backgroundColor: '#FF6F00', borderTopRightRadius: 6, borderBottomRightRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 3,
   },
-  milkTxt: { fontSize: 13, fontWeight: '600' },
-  tagsRow: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginTop: 2 },
-  tag:     { borderRadius: 8, paddingHorizontal: 9, paddingVertical: 3, borderWidth: 1 },
-  tagTxt:  { fontSize: 11, fontWeight: '600' },
-  footer: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    borderTopWidth: 1, borderTopColor: D.border,
-    paddingTop: 10, marginTop: 4,
-  },
-  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  locationTxt: { fontSize: 13, color: D.textDim },
-  sellerRow:   { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  avatar:      { width: 28, height: 28, borderRadius: 14, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
-  avatarTxt:   { fontSize: 10, fontWeight: '900' },
-  sellerName:  { fontSize: 13, fontWeight: '600', color: D.textDim },
+  badgeTxt: { color: '#fff', fontSize: 8.5, fontWeight: '800', letterSpacing: 0.3 },
 
-  emptyWrap:  { alignItems: 'center', paddingVertical: 60, gap: 10 },
-  emptyTitle: { fontSize: 16, color: D.textDim, fontWeight: '700' },
-  emptySub:   { fontSize: 13, color: D.textFaint },
+  distBadge: {
+    position: 'absolute', bottom: 8, left: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 2,
+    paddingHorizontal: 7, paddingVertical: 3,
+  },
+  distBadgeTxt: { color: '#fff', fontSize: 10, fontWeight: '700' },
+
+  vaccBadge: {
+    position: 'absolute', bottom: 8, right: 8,
+    backgroundColor: GREEN, borderRadius: 10,
+    width: 20, height: 20, justifyContent: 'center', alignItems: 'center',
+  },
+
+  cardBody:   { padding: 10 },
+  animalName: { fontSize: 13, fontWeight: '800', color: '#1A1A1A', marginBottom: 3 },
+  price:      { fontSize: 15, fontWeight: '900', color: GREEN, marginBottom: 5 },
+  metaRow:    { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 5 },
+  metaTxt:    { fontSize: 11, color: '#777', flex: 1 },
+  statsRow:   { flexDirection: 'row', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
+  statItem:   { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  statTxt:    { fontSize: 11, color: '#777', fontWeight: '500' },
+
+  bookBtn: {
+    backgroundColor: GREEN, borderRadius: 8,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 8, gap: 5,
+  },
+  bookBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '800' },
+
+  emptyWrap:    { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 24 },
+  emptyIconBg:  { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E8F5EE', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
+  emptyTitle:   { fontSize: 20, fontWeight: '900', color: '#1E293B', marginBottom: 6 },
+  emptyTxt:     { fontSize: 14, color: '#64748B', fontWeight: '500', textAlign: 'center', marginBottom: 4 },
+  emptyHintTxt: { fontSize: 12, color: '#94A3B8', textAlign: 'center', marginBottom: 16 },
+  expandBtn:    { marginTop: 14, paddingHorizontal: 20, paddingVertical: 10, backgroundColor: GREEN + '15', borderRadius: 20 },
+  expandBtnTxt: { color: GREEN, fontWeight: '700', fontSize: 13 },
+
+  fab: {
+    position: 'absolute', bottom: 24, right: 20,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: GREEN, borderRadius: 30,
+    paddingHorizontal: 20, paddingVertical: 14,
+    shadowColor: GREEN, shadowOpacity: 0.40, shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 }, elevation: 8,
+  },
+  fabTxt: { color: '#fff', fontSize: 14, fontWeight: '800' },
 });

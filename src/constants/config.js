@@ -29,13 +29,13 @@ export const API_BASE_URL = __DEV__
   ? Platform.OS === 'web'
     ? 'http://localhost:3001/api/v1'
     : `http://${DEV_LAN_IP}:3001/api/v1`
-  : 'https://resilient-vision-production-917c.up.railway.app/api/v1';
+  : 'https://resilient-vision-production-e784.up.railway.app/api/v1';
 
 export const SOCKET_URL = __DEV__
   ? Platform.OS === 'web'
     ? 'http://localhost:3001'
     : `http://${DEV_LAN_IP}:3001`
-  : 'wss://resilient-vision-production-917c.up.railway.app';
+  : 'wss://resilient-vision-production-e784.up.railway.app';
 
 // ── Input / upload limits ──────────────────────────────────────────────────
 /** Maximum chat message length (characters). Enforced client + server. */

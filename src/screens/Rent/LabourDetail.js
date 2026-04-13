@@ -1,213 +1,335 @@
-import React, { useState } from 'react';
+/**
+ * LabourDetail — Worker/group profile.
+ * Shows: photo gallery, skills, experience, languages, pricing, location.
+ * Primary action: Call the worker directly. No booking flow.
+ */
+import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, TextInput, Alert, Linking,
+  Image, Linking, ActivityIndicator, Dimensions, StatusBar,
 } from 'react-native';
+import { Video, ResizeMode } from 'expo-av';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { COLORS, SHADOWS } from '../../constants/colors';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import api from '../../services/api';
+import { useLanguage } from '../../context/LanguageContext';
 
-export default function LabourDetail({ route }) {
-  const { labour } = route.params;
-  const [days, setDays] = useState('');
-  const [hours, setHours] = useState('');
-  const [workers, setWorkers] = useState('1');
+const { width: W } = Dimensions.get('window');
+const GREEN = '#2D9162';
 
-  const numWorkers = parseInt(workers) || 1;
-  const costByDay = days ? parseInt(days) * labour.pricePerDay * numWorkers : 0;
-  const costByHour = hours ? parseInt(hours) * labour.pricePerHour * numWorkers : 0;
+export default function LabourDetail({ route, navigation }) {
+  const insets = useSafeAreaInsets();
+  const { t } = useLanguage();
+  const { id, labour: passedData } = route.params;
 
-  const handleHire = () => {
-    if (!days && !hours) {
-      Alert.alert('Enter Details', 'Please enter number of days or hours.');
-      return;
-    }
-    Alert.alert(
-      'Request Sent!',
-      `Your labour hire request has been sent to ${labour.type === 'group' ? labour.groupName : labour.leader}. They will contact you within 1 hour.`,
-      [{ text: 'OK' }]
+  const [data,        setData]        = useState(passedData || null);
+  const [galIdx,      setGalIdx]      = useState(0);
+  const [loadingData, setLoadingData] = useState(!passedData);
+
+  const listingId = id || passedData?.id;
+
+  useEffect(() => {
+    if (!listingId) return;
+    (async () => {
+      try {
+        const res = await api.get(`/rent/labour/${listingId}`);
+        setData(res.data.data);
+      } catch { /* keep passedData */ }
+      finally { setLoadingData(false); }
+    })();
+  }, [listingId]);
+
+  if (loadingData || !data) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
+        <ActivityIndicator size="large" color={GREEN} />
+      </View>
     );
-  };
+  }
+
+  const l = data;
+  const phone    = l.phone || l.provider?.phone || null;
+  const allMedia = [
+    ...(l.image  ? [l.image]    : []),
+    ...(l.images || []),
+    ...(l.videos || []),
+  ];
+  const initials = (l.leader || l.name || 'W').split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
   const handleCall = () => {
-    Linking.openURL(`tel:${labour.phone}`);
+    if (!phone) { return; }
+    Linking.openURL(`tel:${phone}`);
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+    <View style={D.root}>
+      <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
-        {/* Header Card */}
-        <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={styles.headerCard}>
-          <View style={styles.labourAvatar}>
-            <Text style={styles.labourAvatarText}>{labour.image}</Text>
-          </View>
-          <Text style={styles.labourName}>{labour.type === 'group' ? labour.groupName : labour.leader}</Text>
-          <Text style={styles.labourType}>
-            {labour.type === 'group' ? `👥 Group of ${labour.workers} workers` : '👤 Individual Labour Expert'}
-          </Text>
-          <View style={styles.availBadge}>
-            <View style={[styles.availDot, { backgroundColor: labour.available ? COLORS.gold : COLORS.error }]} />
-            <Text style={styles.availText}>{labour.available ? 'Available Now' : 'Currently Busy'}</Text>
-          </View>
-        </LinearGradient>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 110 }}>
 
-        <View style={styles.content}>
-          {/* Rating */}
-          <View style={styles.ratingCard}>
-            <View style={styles.ratingItem}>
-              <Text style={styles.ratingBig}>{labour.rating}</Text>
-              <View style={styles.starsRow}>
-                {[1, 2, 3, 4, 5].map(s => (
-                  <Ionicons key={s} name={s <= Math.round(labour.rating) ? 'star' : 'star-outline'} size={14} color={COLORS.gold} />
-                ))}
-              </View>
-              <Text style={styles.ratingReviews}>{labour.reviews} Reviews</Text>
+        {/* ── Gallery ── */}
+        {allMedia.length > 0 ? (
+          <View style={{ height: 280, position: 'relative' }}>
+            <ScrollView
+              horizontal pagingEnabled showsHorizontalScrollIndicator={false}
+              onMomentumScrollEnd={e => setGalIdx(Math.round(e.nativeEvent.contentOffset.x / W))}
+            >
+              {allMedia.map((uri, i) => {
+                const isVideo = l.videos?.includes(uri);
+                return (
+                  <View key={i} style={{ width: W, height: 280 }}>
+                    {isVideo
+                      ? <Video
+                          source={{ uri }}
+                          style={[D.galImg, { height: 280 }]}
+                          resizeMode={ResizeMode.COVER}
+                          useNativeControls
+                          shouldPlay={false}
+                          isLooping={false}
+                        />
+                      : <Image source={{ uri }} style={[D.galImg, { height: 280 }]} resizeMode="cover" />
+                    }
+                  </View>
+                );
+              })}
+            </ScrollView>
+            {/* Gradient overlay */}
+            <LinearGradient
+              colors={['rgba(0,0,0,0.35)', 'transparent', 'rgba(0,0,0,0.45)']}
+              locations={[0, 0.45, 1]}
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+              pointerEvents="none"
+            />
+            {/* Back button overlay */}
+            <View style={[D.galleryNav, { paddingTop: insets.top + 8 }]}>
+              <TouchableOpacity onPress={() => navigation.goBack()} style={D.navBtn}>
+                <Ionicons name="arrow-back" size={22} color="#fff" />
+              </TouchableOpacity>
+              {phone && (
+                <TouchableOpacity onPress={handleCall} style={D.navBtn}>
+                  <Ionicons name="call-outline" size={22} color="#fff" />
+                </TouchableOpacity>
+              )}
             </View>
-            <View style={styles.ratingDivider} />
-            <View style={styles.ratingItem}>
-              <Text style={styles.ratingBig}>₹{labour.pricePerDay}</Text>
-              <Text style={styles.ratingLabel}>Per Day/Person</Text>
-            </View>
-            <View style={styles.ratingDivider} />
-            <View style={styles.ratingItem}>
-              <Text style={styles.ratingBig}>₹{labour.pricePerHour}</Text>
-              <Text style={styles.ratingLabel}>Per Hour/Person</Text>
-            </View>
-          </View>
-
-          {/* Skills */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Skills & Expertise</Text>
-            <View style={styles.skillsGrid}>
-              {labour.skills.map((skill, i) => (
-                <View key={i} style={styles.skillChip}>
-                  <Ionicons name="checkmark-circle" size={16} color={COLORS.primary} />
-                  <Text style={styles.skillText}>{skill}</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          {/* Description */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>About</Text>
-            <Text style={styles.description}>{labour.description}</Text>
-          </View>
-
-          {/* Cost Calculator */}
-          <View style={styles.calcCard}>
-            <Text style={styles.sectionTitle}>Calculate Cost</Text>
-
-            {labour.type === 'group' && (
-              <View style={styles.inputGroup}>
-                <Text style={styles.inputLabel}>Number of Workers Needed</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder={`Max ${labour.workers}`}
-                  keyboardType="numeric"
-                  value={workers}
-                  onChangeText={v => setWorkers(Math.min(parseInt(v) || 1, labour.workers).toString())}
-                />
-                <Text style={styles.inputHint}>Available: {labour.workers} workers in this group</Text>
+            {allMedia.length > 1 && (
+              <View style={D.dots}>
+                {allMedia.map((_, i) => <View key={i} style={[D.dot, i === galIdx && D.dotActive]} />)}
               </View>
             )}
+          </View>
+        ) : (
+          <View style={D.avatarHero}>
+            {/* Back button for no-media path */}
+            <View style={[D.galleryNav, { paddingTop: insets.top + 8 }]}>
+              <TouchableOpacity onPress={() => navigation.goBack()} style={D.navBtn}>
+                <Ionicons name="arrow-back" size={22} color="#fff" />
+              </TouchableOpacity>
+              {phone && (
+                <TouchableOpacity onPress={handleCall} style={D.navBtn}>
+                  <Ionicons name="call-outline" size={22} color="#fff" />
+                </TouchableOpacity>
+              )}
+            </View>
+            <View style={D.bigAvatar}>
+              <Text style={D.bigAvatarTxt}>{initials}</Text>
+            </View>
+          </View>
+        )}
 
-            <View style={styles.calcRow}>
-              <View style={styles.calcBox}>
-                <Text style={styles.calcLabel}>Days of Work</Text>
-                <TextInput style={styles.calcInput} placeholder="e.g. 3" keyboardType="numeric" value={days} onChangeText={setDays} />
-                {costByDay > 0 && <Text style={styles.calcResult}>₹{costByDay.toLocaleString()}</Text>}
-              </View>
-              <Text style={styles.orText}>OR</Text>
-              <View style={styles.calcBox}>
-                <Text style={styles.calcLabel}>Hours of Work</Text>
-                <TextInput style={styles.calcInput} placeholder="e.g. 6" keyboardType="numeric" value={hours} onChangeText={setHours} />
-                {costByHour > 0 && <Text style={styles.calcResult}>₹{costByHour.toLocaleString()}</Text>}
-              </View>
+        <View style={D.content}>
+
+          {/* ── Name + Availability ── */}
+          <View style={D.nameRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={D.name}>{l.leader || l.name}</Text>
+              {l.name && l.leader && <Text style={D.groupName}>{l.name}</Text>}
+              {l.groupSize > 1 && (
+                <View style={D.groupBadge}>
+                  <Ionicons name="people" size={13} color={GREEN} />
+                  <Text style={D.groupBadgeTxt}>{t('rent.workersAvailable', { count: l.groupSize })}</Text>
+                </View>
+              )}
+            </View>
+            <View style={[D.availBadge, { backgroundColor: l.available ? '#E8F5E9' : '#FFF3E0' }]}>
+              <View style={[D.availDot, { backgroundColor: l.available ? GREEN : '#E65100' }]} />
+              <Text style={[D.availTxt, { color: l.available ? GREEN : '#E65100' }]}>
+                {l.available ? t('rent.listAvailable') : t('rent.busy')}
+              </Text>
             </View>
           </View>
 
-          {/* Location */}
-          <View style={styles.section}>
-            <View style={styles.locationRow}>
-              <Ionicons name="location" size={18} color={COLORS.primary} />
-              <Text style={styles.locationText}>{labour.location}</Text>
+          {/* ── Pricing ── */}
+          <View style={D.priceRow}>
+            <View style={D.priceCard}>
+              <Text style={D.priceAmt}>₹{l.pricePerDay?.toLocaleString()}</Text>
+              <Text style={D.priceLbl}>{t('rent.perDayShort')}</Text>
             </View>
+            {l.pricePerHour && (
+              <View style={[D.priceCard, { backgroundColor: '#EDE7F6' }]}>
+                <Text style={[D.priceAmt, { color: '#6A1B9A' }]}>₹{l.pricePerHour?.toLocaleString()}</Text>
+                <Text style={D.priceLbl}>{t('rent.perHourShort')}</Text>
+              </View>
+            )}
+            {l.rating > 0 && (
+              <View style={D.ratingCard}>
+                <View style={{ flexDirection: 'row', gap: 2 }}>
+                  {[1,2,3,4,5].map(s => (
+                    <Ionicons key={s} name={s <= Math.round(l.rating) ? 'star' : 'star-outline'} size={12} color="#F9A825" />
+                  ))}
+                </View>
+                <Text style={D.ratingTxt}>{l.rating?.toFixed(1)} ({l.ratingCount})</Text>
+              </View>
+            )}
           </View>
+
+          {/* ── Call CTA Card ── */}
+          <TouchableOpacity
+            style={[D.callCard, !phone && { opacity: 0.4 }]}
+            onPress={handleCall}
+            disabled={!phone}
+            activeOpacity={0.85}
+          >
+            <View style={D.callCardIcon}>
+              <Ionicons name="call" size={26} color="#fff" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={D.callCardTitle}>{t('rent.callToHire')}</Text>
+              <Text style={D.callCardSub}>{phone ? phone : t('rent.phoneNotListed')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={GREEN} />
+          </TouchableOpacity>
+
+          {/* ── Skills ── */}
+          <Text style={D.sectionTitle}>{t('rent.skillsExpertise')}</Text>
+          <View style={D.skillsWrap}>
+            {(l.skills || []).map((s, i) => (
+              <View key={i} style={D.skillChip}>
+                <Ionicons name="checkmark-circle" size={14} color={GREEN} />
+                <Text style={D.skillTxt}>{s}</Text>
+              </View>
+            ))}
+          </View>
+
+          {/* ── Languages ── */}
+          {l.languages?.length > 0 && (
+            <View style={D.infoRow}>
+              <Ionicons name="chatbubble-outline" size={15} color="#888" />
+              <Text style={D.infoTxt}>{t('rent.speaks')} {l.languages.join(', ')}</Text>
+            </View>
+          )}
+
+          {/* ── Experience ── */}
+          {l.experience && (
+            <View style={D.infoRow}>
+              <Ionicons name="ribbon-outline" size={15} color="#888" />
+              <Text style={D.infoTxt}>{l.experience}</Text>
+            </View>
+          )}
+
+          {/* ── Description ── */}
+          {l.description && (
+            <>
+              <Text style={D.sectionTitle}>{t('rent.aboutSection')}</Text>
+              <Text style={D.descTxt}>{l.description}</Text>
+            </>
+          )}
+
+          {/* ── Availability window ── */}
+          {l.availableFrom && (
+            <View style={D.availWindowCard}>
+              <Ionicons name="calendar-outline" size={16} color={GREEN} />
+              <Text style={D.availWindowTxt}>
+                {t('rent.listAvailable')} {new Date(l.availableFrom).toLocaleDateString('en-IN')}
+                {l.availableTo ? ` – ${new Date(l.availableTo).toLocaleDateString('en-IN')}` : ` ${t('rent.onwards')}`}
+              </Text>
+            </View>
+          )}
+
+          {/* ── Location ── */}
+          <View style={D.locRow}>
+            <Ionicons name="location-outline" size={15} color="#888" />
+            <Text style={D.locTxt}>{l.location}{l.district ? `, ${l.district}` : ''}</Text>
+          </View>
+
         </View>
       </ScrollView>
 
-      <View style={styles.bottomBar}>
-        <TouchableOpacity style={styles.callBtn} onPress={handleCall}>
-          <Ionicons name="call" size={22} color={COLORS.primary} />
-          <Text style={styles.callBtnText}>Call Now</Text>
-        </TouchableOpacity>
+      {/* ── Bottom Call Button ── */}
+      <View style={[D.bottomBar, { paddingBottom: insets.bottom + 10 }]}>
         <TouchableOpacity
-          style={[styles.hireBtn, !labour.available && { opacity: 0.5 }]}
-          onPress={handleHire}
-          disabled={!labour.available}
+          style={[D.bottomCallBtn, !phone && { opacity: 0.4 }]}
+          onPress={handleCall}
+          disabled={!phone}
         >
-          <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={styles.hireGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-            <Ionicons name="people" size={22} color={COLORS.textWhite} />
-            <Text style={styles.hireBtnText}>{labour.available ? 'Hire Now' : 'Currently Busy'}</Text>
-          </LinearGradient>
+          <Ionicons name="call" size={22} color="#fff" />
+          <Text style={D.bottomCallTxt}>
+            {phone ? `${t('rent.callNow')}  •  ${phone}` : t('rent.phoneNotListed')}
+          </Text>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: COLORS.background },
+const D = StyleSheet.create({
+  root:   { flex: 1, backgroundColor: '#F8F9FA' },
 
-  headerCard: { padding: 24, alignItems: 'center', gap: 10 },
-  labourAvatar: { width: 80, height: 80, borderRadius: 40, backgroundColor: '#FFFFFF30', justifyContent: 'center', alignItems: 'center', marginBottom: 4 },
-  labourAvatarText: { fontSize: 28, fontWeight: '800', color: COLORS.textWhite },
-  labourName: { fontSize: 22, fontWeight: '800', color: COLORS.textWhite },
-  labourType: { fontSize: 14, color: COLORS.primaryPale },
-  availBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#FFFFFF20', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 6 },
-  availDot: { width: 8, height: 8, borderRadius: 4 },
-  availText: { fontSize: 13, fontWeight: '700', color: COLORS.textWhite },
+  // Gallery nav overlay
+  galleryNav:  { position: 'absolute', top: 0, left: 0, right: 0, flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
+  navBtn:      { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
+
+  galImg:   { width: W },
+  dots:     { position: 'absolute', bottom: 12, width: '100%', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  dot:      { width: 6, height: 6, borderRadius: 3, backgroundColor: 'rgba(255,255,255,0.5)' },
+  dotActive:{ backgroundColor: '#fff', width: 20 },
+
+  avatarHero:    { backgroundColor: '#E8F5EE', paddingVertical: 36, alignItems: 'center', position: 'relative' },
+  bigAvatar:     { width: 96, height: 96, borderRadius: 48, backgroundColor: GREEN, justifyContent: 'center', alignItems: 'center' },
+  bigAvatarTxt:  { fontSize: 34, fontWeight: '800', color: '#fff' },
 
   content: { padding: 16 },
 
-  ratingCard: { flexDirection: 'row', backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 16, ...SHADOWS.small },
-  ratingItem: { flex: 1, alignItems: 'center', gap: 4 },
-  ratingBig: { fontSize: 22, fontWeight: '900', color: COLORS.primary },
-  starsRow: { flexDirection: 'row', gap: 2 },
-  ratingReviews: { fontSize: 11, color: COLORS.textLight },
-  ratingLabel: { fontSize: 12, color: COLORS.textMedium, textAlign: 'center' },
-  ratingDivider: { width: 1, backgroundColor: COLORS.border, marginVertical: 4 },
+  nameRow:    { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14, gap: 10 },
+  name:       { fontSize: 20, fontWeight: '800', color: '#1A1A1A' },
+  groupName:  { fontSize: 13, color: '#888', marginTop: 2 },
+  groupBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 },
+  groupBadgeTxt: { fontSize: 12, color: GREEN, fontWeight: '700' },
+  availBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, flexShrink: 0 },
+  availDot:   { width: 7, height: 7, borderRadius: 4 },
+  availTxt:   { fontSize: 11, fontWeight: '700' },
 
-  section: { marginBottom: 16 },
-  sectionTitle: { fontSize: 17, fontWeight: '800', color: COLORS.textDark, marginBottom: 12 },
-  description: { fontSize: 15, color: COLORS.textMedium, lineHeight: 24 },
+  priceRow:  { flexDirection: 'row', gap: 10, marginBottom: 16, flexWrap: 'wrap' },
+  priceCard: { backgroundColor: '#E8F5EE', borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center', minWidth: 90 },
+  priceAmt:  { fontSize: 20, fontWeight: '900', color: GREEN },
+  priceLbl:  { fontSize: 11, color: '#888', marginTop: 2 },
+  ratingCard:{ backgroundColor: '#FFFDE7', borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14, alignItems: 'center', justifyContent: 'center' },
+  ratingTxt: { fontSize: 11, color: '#F57F17', fontWeight: '700', marginTop: 4 },
 
-  skillsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  skillChip: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.primaryPale, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  skillText: { fontSize: 14, color: COLORS.primary, fontWeight: '600' },
+  // Call CTA card
+  callCard:     { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: '#E8F5EE', borderRadius: 16, padding: 14, marginBottom: 20, borderWidth: 1.5, borderColor: GREEN + '40' },
+  callCardIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: GREEN, justifyContent: 'center', alignItems: 'center' },
+  callCardTitle:{ fontSize: 16, fontWeight: '800', color: '#1A1A1A' },
+  callCardSub:  { fontSize: 13, color: GREEN, fontWeight: '600', marginTop: 2 },
 
-  calcCard: { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 16, ...SHADOWS.small },
-  inputGroup: { marginBottom: 16 },
-  inputLabel: { fontSize: 14, fontWeight: '700', color: COLORS.textDark, marginBottom: 8 },
-  input: { backgroundColor: COLORS.inputBg, borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 10, fontSize: 15, color: COLORS.textDark },
-  inputHint: { fontSize: 12, color: COLORS.textLight, marginTop: 4 },
+  sectionTitle: { fontSize: 16, fontWeight: '800', color: '#1A1A1A', marginBottom: 10, marginTop: 4 },
 
-  calcRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  calcBox: { flex: 1 },
-  calcLabel: { fontSize: 13, fontWeight: '600', color: COLORS.textDark, marginBottom: 8 },
-  calcInput: { backgroundColor: COLORS.inputBg, borderRadius: 10, borderWidth: 1.5, borderColor: COLORS.border, paddingHorizontal: 12, paddingVertical: 10, fontSize: 16, fontWeight: '700', color: COLORS.textDark },
-  calcResult: { fontSize: 14, fontWeight: '800', color: COLORS.success, marginTop: 6 },
-  orText: { fontSize: 14, fontWeight: '700', color: COLORS.textLight },
+  skillsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
+  skillChip:  { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: '#E8F5EE', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 7 },
+  skillTxt:   { fontSize: 12, color: GREEN, fontWeight: '700' },
 
-  locationRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  locationText: { fontSize: 15, color: COLORS.textMedium, fontWeight: '600' },
+  infoRow:  { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  infoTxt:  { fontSize: 13, color: '#555', flex: 1, lineHeight: 19 },
 
-  bottomBar: { flexDirection: 'row', padding: 16, gap: 12, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border },
-  callBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 2, borderColor: COLORS.primary, borderRadius: 14, paddingVertical: 14 },
-  callBtnText: { fontSize: 15, fontWeight: '700', color: COLORS.primary },
-  hireBtn: { flex: 1, borderRadius: 14, overflow: 'hidden' },
-  hireGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14 },
-  hireBtnText: { fontSize: 15, fontWeight: '700', color: COLORS.textWhite },
+  descTxt: { fontSize: 14, color: '#555', lineHeight: 22, marginBottom: 16 },
+
+  availWindowCard: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#E8F5EE', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 14 },
+  availWindowTxt:  { fontSize: 13, color: GREEN, fontWeight: '700', flex: 1 },
+
+  locRow:  { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  locTxt:  { fontSize: 13, color: '#888' },
+
+  bottomBar:     { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 12, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#eee' },
+  bottomCallBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: GREEN, borderRadius: 16, paddingVertical: 15 },
+  bottomCallTxt: { fontSize: 15, fontWeight: '800', color: '#fff' },
 });

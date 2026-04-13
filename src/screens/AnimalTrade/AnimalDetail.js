@@ -1,11 +1,15 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  SafeAreaView, Linking, Alert,
+  SafeAreaView, Linking, Alert, Image, Animated, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SHADOWS } from '../../constants/colors';
+import { useLanguage } from '../../context/LanguageContext';
+
+const { width: W } = Dimensions.get('window');
+const HERO_H = 300;
 
 function InfoRow({ icon, label, value }) {
   return (
@@ -23,10 +27,27 @@ function InfoRow({ icon, label, value }) {
 
 export default function AnimalDetail({ route, navigation }) {
   const { listing } = route.params;
+  const { t } = useLanguage();
+  const scrollY   = useRef(new Animated.Value(0)).current;
+  const contentAnim = useRef(new Animated.Value(0)).current;
+
+  const imageUrl = listing.images && listing.images[0] ? listing.images[0] : null;
+
+  useEffect(() => {
+    Animated.timing(contentAnim, {
+      toValue: 1, duration: 450, delay: 120, useNativeDriver: true,
+    }).start();
+  }, []);
+
+  const contentOpacity = contentAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+  const contentY       = contentAnim.interpolate({ inputRange: [0, 1], outputRange: [30, 0] });
+
+  // Hero parallax
+  const heroScale = scrollY.interpolate({ inputRange: [-60, 0, HERO_H], outputRange: [1.2, 1, 0.88], extrapolate: 'clamp' });
 
   const handleCall = () => {
     Linking.openURL(`tel:${listing.sellerPhone}`).catch(() =>
-      Alert.alert('Error', 'Could not open phone app.')
+      Alert.alert(t('product.error'), t('animalDetail.phoneError'))
     );
   };
 
@@ -39,21 +60,60 @@ export default function AnimalDetail({ route, navigation }) {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView showsVerticalScrollIndicator={false}>
+    <View style={styles.container}>
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: true })}
+      >
 
-        {/* Animal Image */}
-        <LinearGradient colors={[COLORS.primaryLight + '60', COLORS.primaryPale]} style={styles.imageArea}>
-          <Ionicons name="paw" size={90} color={COLORS.primary} />
-          {listing.verified && (
-            <View style={styles.verifiedBadge}>
-              <Ionicons name="shield-checkmark" size={14} color={COLORS.textWhite} />
-              <Text style={styles.verifiedText}>Seller Verified</Text>
+        {/* Hero Image */}
+        <View style={styles.heroWrap}>
+          <Animated.View style={[styles.heroInner, { transform: [{ scale: heroScale }] }]}>
+            {imageUrl
+              ? <Image source={{ uri: imageUrl }} style={styles.heroImg} resizeMode="cover" />
+              : (
+                <View style={[styles.heroImg, styles.heroFallback]}>
+                  <Ionicons name="paw" size={90} color={COLORS.primary + '60'} />
+                </View>
+              )
+            }
+          </Animated.View>
+
+          {/* Gradient overlay */}
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.55)']}
+            style={styles.heroGradient}
+            pointerEvents="none"
+          />
+
+          {/* Top nav */}
+          <SafeAreaView style={styles.heroNav}>
+            <TouchableOpacity style={styles.navBtn} onPress={() => navigation.goBack()}>
+              <Ionicons name="arrow-back" size={22} color="#fff" />
+            </TouchableOpacity>
+            <View style={styles.navRight}>
+              <TouchableOpacity style={styles.navBtn}>
+                <Ionicons name="heart-outline" size={22} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.navBtn}>
+                <Ionicons name="share-social-outline" size={22} color="#fff" />
+              </TouchableOpacity>
             </View>
-          )}
-        </LinearGradient>
+          </SafeAreaView>
 
-        <View style={styles.content}>
+          {/* Bottom badges on image */}
+          <View style={styles.heroBadges}>
+            {listing.verified && (
+              <View style={styles.verifiedBadge}>
+                <Ionicons name="shield-checkmark" size={12} color="#fff" />
+                <Text style={styles.verifiedText}>{t('animalDetail.sellerVerified')}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        <Animated.View style={[styles.content, { opacity: contentOpacity, transform: [{ translateY: contentY }] }]}>
           {/* Title & Price */}
           <View style={styles.titleRow}>
             <View>
@@ -75,27 +135,27 @@ export default function AnimalDetail({ route, navigation }) {
 
           {/* Animal Details */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Animal Details</Text>
+            <Text style={styles.sectionTitle}>{t('animalDetail.animalDetails')}</Text>
             <View style={styles.detailsGrid}>
-              <InfoRow icon="male-female" label="Gender" value={listing.gender} />
-              <InfoRow icon="time" label="Age" value={listing.age} />
-              <InfoRow icon="barbell" label="Weight" value={listing.weight} />
+              <InfoRow icon="male-female" label={t('gender')} value={listing.gender} />
+              <InfoRow icon="time" label={t('age')} value={listing.age} />
+              <InfoRow icon="barbell" label={t('weight')} value={listing.weight} />
               {listing.milkYield !== 'N/A' && (
-                <InfoRow icon="water" label="Milk Yield" value={listing.milkYield} />
+                <InfoRow icon="water" label={t('milkYield')} value={listing.milkYield} />
               )}
-              <InfoRow icon="medkit" label="Vaccinated" value={listing.vaccinated ? 'Yes ✓' : 'Not mentioned'} />
+              <InfoRow icon="medkit" label={t('vaccinated')} value={listing.vaccinated ? t('animalDetail.yes') : t('animalDetail.notMentioned')} />
             </View>
           </View>
 
           {/* Description */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Description</Text>
+            <Text style={styles.sectionTitle}>{t('product.productDescription')}</Text>
             <Text style={styles.description}>{listing.description}</Text>
           </View>
 
           {/* Seller Info */}
           <View style={styles.sellerCard}>
-            <Text style={styles.sectionTitle}>Seller Information</Text>
+            <Text style={styles.sectionTitle}>{t('animalDetail.sellerInfo')}</Text>
             <View style={styles.sellerInfo}>
               <View style={styles.sellerAvatar}>
                 <Text style={styles.sellerAvatarText}>{listing.sellerAvatar}</Text>
@@ -106,7 +166,7 @@ export default function AnimalDetail({ route, navigation }) {
                   <Ionicons name="location" size={14} color={COLORS.textLight} />
                   <Text style={styles.locationText}>{listing.sellerLocation}</Text>
                 </View>
-                <Text style={styles.postedDate}>Posted {listing.postedDate}</Text>
+                <Text style={styles.postedDate}>{t('animalDetail.postedDate', { date: listing.postedDate })}</Text>
               </View>
               {listing.verified && (
                 <View style={styles.verifiedSmall}>
@@ -120,38 +180,60 @@ export default function AnimalDetail({ route, navigation }) {
           <View style={styles.tipsCard}>
             <Ionicons name="warning" size={18} color={COLORS.warning} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.tipsTitle}>Safety Tips</Text>
-              <Text style={styles.tipsText}>• Visit and physically inspect the animal before buying{'\n'}• Ask for vaccination certificate{'\n'}• Transfer payment only after receiving animal{'\n'}• FarmEasy is not responsible for transactions</Text>
+              <Text style={styles.tipsTitle}>{t('safetyTips')}</Text>
+              <Text style={styles.tipsText}>{t('animalDetail.safetyTipsText')}</Text>
             </View>
           </View>
-        </View>
-      </ScrollView>
+        </Animated.View>
+      </Animated.ScrollView>
 
       {/* Bottom Action Buttons */}
       <View style={styles.bottomBar}>
         <TouchableOpacity style={styles.callBtn} onPress={handleCall}>
-          <Ionicons name="call" size={22} color={COLORS.primary} />
-          <Text style={styles.callBtnText}>Call Seller</Text>
+          <Ionicons name="call" size={20} color={COLORS.primary} />
+          <Text style={styles.callBtnText}>{t('callSeller')}</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.chatBtn} onPress={handleChat}>
-          <LinearGradient colors={[COLORS.primary, COLORS.primaryMedium]} style={styles.chatGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
-            <Ionicons name="chatbubbles" size={22} color={COLORS.textWhite} />
-            <Text style={styles.chatBtnText}>Chat with Seller</Text>
+          <LinearGradient colors={[COLORS.primary, '#1A6644']} style={styles.chatGradient} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}>
+            <Ionicons name="chatbubbles" size={20} color="#fff" />
+            <Text style={styles.chatBtnText}>{t('chatWithSeller')}</Text>
           </LinearGradient>
         </TouchableOpacity>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
 
-  imageArea: { height: 220, justifyContent: 'center', alignItems: 'center', position: 'relative' },
-  verifiedBadge: { position: 'absolute', bottom: 16, left: 16, flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: COLORS.success, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 6 },
-  verifiedText: { color: COLORS.textWhite, fontSize: 13, fontWeight: '700' },
+  // ── Hero ──
+  heroWrap:    { height: HERO_H, position: 'relative', overflow: 'hidden' },
+  heroInner:   { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+  heroImg:     { width: '100%', height: '100%' },
+  heroFallback:{ backgroundColor: '#EEF8F4', justifyContent: 'center', alignItems: 'center' },
+  heroGradient:{ position: 'absolute', bottom: 0, left: 0, right: 0, height: '70%' },
 
-  content: { padding: 20 },
+  heroNav: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, paddingTop: 8,
+  },
+  navRight: { flexDirection: 'row', gap: 8 },
+  navBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  heroBadges: { position: 'absolute', bottom: 16, left: 16, flexDirection: 'row', gap: 8 },
+  verifiedBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: COLORS.success, borderRadius: 12,
+    paddingHorizontal: 10, paddingVertical: 5,
+  },
+  verifiedText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  content: { padding: 20, backgroundColor: COLORS.background, marginTop: -20, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
   animalName: { fontSize: 22, fontWeight: '800', color: COLORS.textDark },
   animalNameHi: { fontSize: 16, color: COLORS.textMedium, fontWeight: '600', marginTop: 4 },
@@ -185,10 +267,22 @@ const styles = StyleSheet.create({
   tipsTitle: { fontSize: 14, fontWeight: '700', color: COLORS.textDark, marginBottom: 8 },
   tipsText: { fontSize: 13, color: COLORS.textMedium, lineHeight: 22 },
 
-  bottomBar: { flexDirection: 'row', padding: 16, gap: 12, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border },
-  callBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderWidth: 2, borderColor: COLORS.primary, borderRadius: 14, paddingVertical: 14 },
+  bottomBar: {
+    flexDirection: 'row', padding: 16, gap: 12,
+    backgroundColor: COLORS.surface,
+    borderTopWidth: 1, borderTopColor: COLORS.border,
+    shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 8,
+    shadowOffset: { width: 0, height: -2 }, elevation: 6,
+  },
+  callBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, borderWidth: 2, borderColor: COLORS.primary, borderRadius: 14, paddingVertical: 14,
+  },
   callBtnText: { fontSize: 15, fontWeight: '700', color: COLORS.primary },
   chatBtn: { flex: 1, borderRadius: 14, overflow: 'hidden' },
-  chatGradient: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14 },
-  chatBtnText: { fontSize: 15, fontWeight: '700', color: COLORS.textWhite },
+  chatGradient: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, paddingVertical: 14, borderRadius: 14,
+  },
+  chatBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

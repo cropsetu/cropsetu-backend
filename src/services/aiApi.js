@@ -1,0 +1,456 @@
+/**
+ * FarmMind AI API Client
+ * All AI, market, and planner endpoints hit the same Express backend (port 3001).
+ * Auth token is injected automatically via the existing api.js interceptors.
+ */
+import api from './api';
+import { compressImage } from '../utils/mediaCompressor';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI CHAT
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Send a message to FarmMind AI.
+ * @param {string} message
+ * @param {string|null} conversationId  Pass null to start a new conversation.
+ * @param {object} farmProfile  Farm context to personalise the AI response.
+ * @returns {{ reply, type, card, conversationId }}
+ */
+export async function sendChatMessage(message, conversationId = null, farmProfile = {}) {
+  const { data } = await api.post('/ai/chat', { message, conversationId, farmProfile });
+  return data.data; // { reply, type, card, conversationId }
+}
+
+/**
+ * List all conversations for the current user.
+ */
+export async function getConversations() {
+  const { data } = await api.get('/ai/conversations');
+  return data.data || [];
+}
+
+/**
+ * Get full message history for a conversation.
+ * @param {string} conversationId
+ */
+export async function getConversationMessages(conversationId) {
+  const { data } = await api.get(`/ai/conversations/${conversationId}`);
+  return data.data || { messages: [] };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROP SCAN
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Upload a crop image for AI disease diagnosis.
+ * @param {string} imageUri    Local file URI from ImagePicker / Camera
+ * @param {object} farmContext All farm context (crop, age, symptoms, soil, etc.)
+ * @returns {Object} diagnosis result
+ */
+// Normalize MIME types so multer always accepts the image.
+// HEIC/HEIF from iOS cameras are re-encoded to JPEG on upload.
+const MIME_NORMALIZE = {
+  'image/heic':   'image/jpeg',
+  'image/heif':   'image/jpeg',
+  'image/HEIC':   'image/jpeg',
+  'image/HEIF':   'image/jpeg',
+  'image/jpg':    'image/jpeg',
+  'image/JPG':    'image/jpeg',
+  'image/JPEG':   'image/jpeg',
+};
+
+export async function scanCropImage(imageUri, farmContext = {}, pickerMimeType = null) {
+  // Compress image to ≤1 MB before upload.
+  // Camera photos on Android can be 3–8 MB; compressImage outputs JPEG ≤1 MB,
+  // which dramatically reduces upload time and server memory pressure.
+  const isWeb = typeof document !== 'undefined';
+  let uploadUri = imageUri;
+  let type = 'image/jpeg';
+
+  if (!isWeb) {
+    const compressed = await compressImage(imageUri);
+    uploadUri = compressed.uri;
+    // compressImage always outputs JPEG regardless of source format
+    type = 'image/jpeg';
+  } else {
+    // Web path: keep original URI; determine MIME from picker or extension
+    const fileName = imageUri.split('/').pop() || 'crop.jpg';
+    const ext = (fileName.match(/\.(\w+)$/)?.[1] || 'jpg').toLowerCase();
+    const rawType = pickerMimeType || `image/${ext}`;
+    type = MIME_NORMALIZE[rawType] || rawType || 'image/jpeg';
+  }
+
+  const fileName = uploadUri.split('/').pop() || 'crop.jpg';
+  const safeName = fileName.match(/\.(jpg|jpeg)$/i)
+    ? fileName
+    : fileName.replace(/\.\w+$/, '') + '.jpg';
+
+  const formData = new FormData();
+
+  if (isWeb) {
+    // Web: imageUri is a blob/data URL — fetch → Blob then append.
+    const resp = await fetch(uploadUri);
+    const blob = await resp.blob();
+    formData.append('image', blob, safeName);
+  } else {
+    formData.append('image', { uri: uploadUri, name: safeName, type });
+  }
+
+  formData.append('farmContext', JSON.stringify(farmContext));
+
+  // Do NOT set Content-Type manually — the api.js interceptor removes it for
+  // FormData so React Native's native networking sets the correct
+  // multipart/form-data; boundary=... value automatically.
+  const { data } = await api.post('/ai/scan', formData, {
+    timeout: 200000, // 3.3 min — 5-agent pipeline can be slow on cold start
+  });
+  return data.data;
+}
+
+/**
+ * Get past scan history for the current user (basic list).
+ */
+export async function getScanHistory() {
+  const { data } = await api.get('/ai/scan/history');
+  return data.data || [];
+}
+
+/**
+ * Get past scan chat sessions (with follow-up Q&A).
+ */
+export async function getScanSessions(page = 1, limit = 20) {
+  const { data } = await api.get('/ai/scan/sessions', { params: { page, limit } });
+  return data.data || [];
+}
+
+/**
+ * Get a full scan session with all messages.
+ */
+export async function getScanSessionDetail(sessionId) {
+  const { data } = await api.get(`/ai/scan/sessions/${sessionId}`);
+  return data.data;
+}
+
+/**
+ * Send a follow-up message in a scan session.
+ */
+export async function sendScanFollowUp(sessionId, message) {
+  const { data } = await api.post(`/ai/scan/${sessionId}/chat`, { message });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SMART ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate smart farming alerts based on user's farm context.
+ * @param {{ crop, state, dayOfSeason }} context
+ * @returns {Array} alerts
+ */
+export async function getSmartAlerts(context = {}) {
+  const { data } = await api.post('/ai/alerts', context);
+  return data.data || [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MARKET PRICES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get real-time market prices from data.gov.in (Agmarknet).
+ * @param {string} crop   e.g. 'Tomato', 'Onion', 'Wheat'
+ * @param {string} state  e.g. 'Maharashtra', 'Punjab'
+ */
+export async function getMarketPrices(crop = 'Tomato', state = 'Maharashtra', city = null) {
+  const params = { crop, state };
+  if (city) params.city = city;
+  const { data } = await api.get('/market/prices', { params });
+  return data.data;
+}
+
+/**
+ * Get 7-day AI price prediction.
+ */
+export async function getMarketPrediction(crop = 'Tomato', state = 'Maharashtra') {
+  const { data } = await api.get('/market/predict', { params: { crop, state } });
+  return data.data;
+}
+
+/**
+ * Get extended multi-month price forecast.
+ * @param {string} crop   e.g. 'Tomato'
+ * @param {string} state  e.g. 'Maharashtra'
+ * @param {string} period '3m' | '6m' | '12m'
+ */
+export async function getExtendedForecast(crop = 'Tomato', state = 'Maharashtra', period = '3m') {
+  const { data } = await api.get('/market/forecast', { params: { crop, state, period }, timeout: 30000 });
+  return data.data;
+}
+
+/**
+ * Get list of supported crops and states.
+ */
+export async function getMarketCrops() {
+  const { data } = await api.get('/market/crops');
+  return data.data || { crops: [], states: [] };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VOICE CHAT
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Send a voice recording to FarmMind AI.
+ * Backend transcribes with Groq Whisper, then answers with FarmMind.
+ * @param {string}      audioUri       Local file URI (m4a / wav / mp3)
+ * @param {string|null} conversationId Existing conversation to continue, or null
+ * @param {object}      farmProfile    Farm context for personalised response
+ * @returns {{ transcription, reply, type, card, conversationId }}
+ */
+export async function sendVoiceMessage(audioUri, conversationId = null, farmProfile = {}) {
+  const formData = new FormData();
+  const fileName = audioUri.split('/').pop() || 'voice.m4a';
+  const ext      = fileName.split('.').pop()?.toLowerCase() || 'm4a';
+  const mimeMap  = { m4a: 'audio/m4a', mp3: 'audio/mpeg', wav: 'audio/wav',
+                     webm: 'audio/webm', ogg: 'audio/ogg', aac: 'audio/aac' };
+  const mimeType = mimeMap[ext] || 'audio/m4a';
+
+  formData.append('audio', { uri: audioUri, name: fileName, type: mimeType });
+  if (conversationId) formData.append('conversationId', conversationId);
+  formData.append('farmProfile', JSON.stringify(farmProfile));
+
+  const { data } = await api.post('/ai/voice', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 40000, // 40s — Whisper + AI response
+  });
+  return data.data; // { transcription, reply, type, card, conversationId }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY PLANNER
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get today's planner tasks.
+ * @param {string} [date]  ISO date string, defaults to today
+ */
+export async function getPlannerTasks(date = null) {
+  const params = date ? { date } : {};
+  const { data } = await api.get('/planner/tasks', { params });
+  return data.data || [];
+}
+
+/**
+ * Mark a task as done or undone.
+ * @param {string}  taskId
+ * @param {boolean} done
+ */
+export async function updateTaskDone(taskId, done) {
+  const { data } = await api.put(`/planner/tasks/${taskId}`, { done });
+  return data.data;
+}
+
+/**
+ * Create a manual task.
+ */
+export async function createTask(task) {
+  const { data } = await api.post('/planner/tasks', task);
+  return data.data;
+}
+
+/**
+ * Delete a task.
+ */
+export async function deleteTask(taskId) {
+  const { data } = await api.delete(`/planner/tasks/${taskId}`);
+  return data.data;
+}
+
+/**
+ * Ask AI to generate today's tasks based on farm context.
+ * @param {{ crop, state, dayOfSeason }} context
+ */
+export async function generateAITasks(context = {}) {
+  const { data } = await api.post('/planner/generate', context, { timeout: 20000 });
+  return data.data || [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MANDI BHAV (Real mandi prices from data.gov.in)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getMandiPrices(commodity = 'Tomato', state = 'Maharashtra', district = null) {
+  const params = { commodity, state };
+  if (district) params.district = district;
+  const { data } = await api.get('/mandi/prices', { params });
+  return data.data;
+}
+
+export async function getMandiTrend(commodity, market, days = 7) {
+  const { data } = await api.get(`/mandi/prices/${encodeURIComponent(commodity)}/trend`, { params: { market, days } });
+  return data.data;
+}
+
+export async function getNearbyMandis(district) {
+  const { data } = await api.get('/mandi/nearby', { params: { district } });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MSP TRACKER
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getMSPRates(year = null, season = null) {
+  const params = {};
+  if (year)   params.year   = year;
+  if (season) params.season = season;
+  const { data } = await api.get('/msp/rates', { params });
+  return data.data;
+}
+
+export async function getMSPRateForCommodity(commodity) {
+  const { data } = await api.get(`/msp/rates/${encodeURIComponent(commodity)}`);
+  return data.data;
+}
+
+export async function getMSPComparison(commodity, state = 'Maharashtra', district = null) {
+  const params = { state };
+  if (district) params.district = district;
+  const { data } = await api.get(`/msp/compare/${encodeURIComponent(commodity)}`, { params });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SOIL HEALTH
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function submitSoilReport(soilData) {
+  const { data } = await api.post('/soil/manual', soilData);
+  return data.data;
+}
+
+export async function getSoilReports() {
+  const { data } = await api.get('/soil/reports');
+  return data.data || [];
+}
+
+export async function getSoilRecommendation(reportId = null, targetCrop = null) {
+  const params = {};
+  if (reportId)   params.reportId   = reportId;
+  if (targetCrop) params.targetCrop = targetCrop;
+  const { data } = await api.get('/soil/recommendation', { params });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PEST ALERTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getPestAlerts(lat, lon, crops = [], state = null, district = null) {
+  const params = { lat, lon };
+  if (crops.length) params.crops = crops.join(',');
+  if (state)        params.state = state;
+  if (district)     params.district = district;
+  const { data } = await api.get('/pest/alerts', { params });
+  return data.data || [];
+}
+
+export async function getPestForecast(lat, lon, crops = []) {
+  const params = { lat, lon };
+  if (crops.length) params.crops = crops.join(',');
+  const { data } = await api.get('/pest/forecast', { params });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LOAN CALCULATOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function calculateLoanKCC(loanData) {
+  const { data } = await api.post('/loan/kcc-eligibility', loanData);
+  return data.data;
+}
+
+export async function calculateLoanEMI(emiData) {
+  const { data } = await api.post('/loan/emi', emiData);
+  return data.data;
+}
+
+export async function getLoanBankComparison() {
+  const { data } = await api.get('/loan/compare');
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROP CALENDAR
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function generateCropCalendar(calendarData) {
+  const { data } = await api.post('/calendar/generate', calendarData, { timeout: 20000 });
+  return data.data;
+}
+
+export async function getCropCalendars() {
+  const { data } = await api.get('/calendar');
+  return data.data || [];
+}
+
+export async function getCalendarTodaysTasks() {
+  const { data } = await api.get('/calendar/today');
+  return data.data || [];
+}
+
+export async function updateCalendarTask(taskId, status) {
+  const { data } = await api.patch(`/calendar/tasks/${taskId}`, { status });
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IRRIGATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getIrrigationToday(params = {}) {
+  const { data } = await api.get('/irrigation/today', { params });
+  return data.data;
+}
+
+export async function getIrrigationWeekly(params = {}) {
+  const { data } = await api.get('/irrigation/weekly', { params });
+  return data.data;
+}
+
+export async function logIrrigation(logData) {
+  const { data } = await api.post('/irrigation/log', logData);
+  return data.data;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// INPUT CALCULATOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function calculateInputs(crop, area, unit = 'acre', organic = false) {
+  const { data } = await api.post('/inputs/calculate', { crop, area, unit, organic });
+  return data.data;
+}
+
+export async function getInputPriceList() {
+  const { data } = await api.get('/inputs/price-list');
+  return data.data || [];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CROPS
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function getCrops() {
+  const { data } = await api.get('/crops');
+  return data.data || [];
+}
+
+export async function searchCrops(q) {
+  const { data } = await api.get('/crops/search', { params: { q } });
+  return data.data || [];
+}

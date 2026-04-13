@@ -17,7 +17,7 @@ const PALETTE = {
   green100: '#E8F5E9',
   green50:  '#F1F8E9',
 
-  // Deep Indigo (community / chat — communication feel)
+  // Deep Indigo (navigation, UI accents)
   indigo900: '#1A237E',
   indigo800: '#283593',
   indigo700: '#303F9F',
@@ -94,26 +94,17 @@ const PALETTE = {
 // ── Semantic tokens ────────────────────────────────────────────────────────────
 export const COLORS = {
   // ── Brand (AgriStore, logo, nav) ─────────────────────────────────────────
-  primary:       PALETTE.green800,   // #1B5E20 vivid forest green
-  primaryMedium: PALETTE.green700,   // #2E7D32
-  primaryLight:  PALETTE.green500,   // #43A047
-  primaryPale:   PALETTE.green100,   // #E8F5E9
-  primarySoft:   PALETTE.green50,    // #F1F8E9
+  primary:       '#2D9162',          // medium sage green (clean, not too dark)
+  primaryMedium: '#278C5E',          // slightly deeper
+  primaryLight:  '#38A874',          // lighter
+  primaryPale:   '#E2F5EC',          // very light mint
+  primarySoft:   '#F0FAF5',          // near-white mint
 
   // ── CTA / Action (harvest orange — primary buttons, FABs) ────────────────
   cta:           PALETTE.orange500,  // #E65100
   ctaDark:       PALETTE.orange600,  // #D84315
   ctaLight:      PALETTE.orange300,  // #FF7043
   ctaPale:       PALETTE.orange50,   // #FBE9E7
-
-  // ── Community / Chat (deep indigo — messaging feel) ──────────────────────
-  chatPrimary:    PALETTE.indigo900,  // #1A237E deep indigo header
-  chatLight:      PALETTE.indigo600,  // #3949AB
-  chatPale:       PALETTE.indigo50,   // #E8EAF6
-  chatBubbleSent: PALETTE.green100,   // #E8F5E9 soft mint (sent messages)
-  chatBg:         PALETTE.cream200,   // #EDE8DA warm parchment (chat wallpaper)
-  chatOnline:     PALETTE.green500,   // #43A047 online indicator
-  chatUnread:     PALETTE.green500,   // #43A047 unread badge
 
   // ── Section-specific accents ─────────────────────────────────────────────
   teal:          PALETTE.teal500,    // #00897B rent/machinery
@@ -133,11 +124,11 @@ export const COLORS = {
   accentDark:    PALETTE.orange500,
   accentPale:    PALETTE.orange50,
 
-  // ── Surfaces (warm paper tones, not green-tinted) ─────────────────────────
-  background:    PALETTE.cream100,   // #F7F4EE warm cream page background
+  // ── Surfaces ──────────────────────────────────────────────────────────────
+  background:    '#EEF8F4',          // light mint green page background
   surface:       PALETTE.white,      // #FFFFFF card / sheet
-  surfaceRaised: PALETTE.cream50,    // #FDFBF7 slightly elevated
-  surfaceSunken: PALETTE.cream200,   // #EDE8DA inset / input bg
+  surfaceRaised: '#F5FCF9',          // slightly elevated mint
+  surfaceSunken: '#E8F5EE',          // inset / input bg
 
   // ── Text (warm neutrals — WCAG AA on white/surface) ─────────────────────
   textDark:      PALETTE.gray900,    // #1C1917 warm near-black
@@ -155,8 +146,8 @@ export const COLORS = {
   borderGreen:   PALETTE.green200,   // #C8E6C9
 
   // ── Status ────────────────────────────────────────────────────────────────
-  success:       PALETTE.green600,
-  successLight:  PALETTE.green100,
+  success:       '#2D9162',
+  successLight:  '#E2F5EC',
   warning:       PALETTE.yellow500,
   warningLight:  PALETTE.yellow100,
   error:         PALETTE.red500,
@@ -172,7 +163,7 @@ export const COLORS = {
   // ── Misc (legacy, keep for compatibility) ─────────────────────────────────
   shadow:        '#00000018',
   overlay:       '#00000060',
-  tabActive:     PALETTE.green800,
+  tabActive:     '#2D9162',
   tabInactive:   PALETTE.gray400,
   cardShadow:    '#00000010',
 };
@@ -181,47 +172,46 @@ export const COLORS = {
 export const SHADOWS = {
   none: {},
   xs: {
-    shadowColor: '#1C1917',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 2,
     elevation: 1,
   },
   small: {
-    shadowColor: '#1C1917',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
   },
   medium: {
-    shadowColor: '#1C1917',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.10,
-    shadowRadius: 12,
-    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 2,
   },
   large: {
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  // Colored glow for CTA / focus states
-  greenGlow: {
-    shadowColor: '#1B5E20',
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.20,
-    shadowRadius: 14,
-    elevation: 8,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  greenGlow: {
+    shadowColor: '#2D9162',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
   },
   orangeGlow: {
     shadowColor: '#E65100',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.28,
-    shadowRadius: 14,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.14,
+    shadowRadius: 8,
+    elevation: 3,
   },
 };
 
