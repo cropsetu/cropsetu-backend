@@ -3,8 +3,10 @@
  * All AI, market, and planner endpoints hit the same Express backend (port 3001).
  * Auth token is injected automatically via the existing api.js interceptors.
  */
-import api from './api';
+import api, { getAccessToken } from './api';
 import { compressImage } from '../utils/mediaCompressor';
+import * as FileSystem from 'expo-file-system';
+import { API_BASE_URL } from '../constants/config';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AI CHAT
@@ -62,58 +64,68 @@ const MIME_NORMALIZE = {
 };
 
 export async function scanCropImage(imageUri, farmContext = {}, pickerMimeType = null) {
-  // Compress image to ≤1 MB before upload.
-  // Camera photos on Android can be 3–8 MB; compressImage outputs JPEG ≤1 MB,
-  // which dramatically reduces upload time and server memory pressure.
   const isWeb = typeof document !== 'undefined';
-  let uploadUri = imageUri;
-  let type = 'image/jpeg';
 
-  if (!isWeb) {
-    try {
-      const compressed = await compressImage(imageUri);
-      // Guard: if compression returns no URI, fall back to original
-      uploadUri = compressed?.uri || imageUri;
-    } catch (compressErr) {
-      // Compression failed (native module crash, out of memory, etc.).
-      // Fall back to the original image — multer accepts up to 10 MB.
-      console.warn('[scanCropImage] compression failed, using original image:', compressErr?.message);
-      uploadUri = imageUri;
-    }
-    type = 'image/jpeg';
-  } else {
-    // Web path: keep original URI; determine MIME from picker or extension
+  // ── Web path ────────────────────────────────────────────────────────────────
+  if (isWeb) {
     const fileName = imageUri.split('/').pop() || 'crop.jpg';
     const ext = (fileName.match(/\.(\w+)$/)?.[1] || 'jpg').toLowerCase();
     const rawType = pickerMimeType || `image/${ext}`;
-    type = MIME_NORMALIZE[rawType] || rawType || 'image/jpeg';
+    const type = MIME_NORMALIZE[rawType] || rawType || 'image/jpeg';
+    const safeName = fileName.match(/\.(jpg|jpeg)$/i)
+      ? fileName : fileName.replace(/\.\w+$/, '') + '.jpg';
+
+    const resp = await fetch(imageUri);
+    const blob = await resp.blob();
+    const formData = new FormData();
+    formData.append('image', blob, safeName);
+    formData.append('farmContext', JSON.stringify(farmContext));
+
+    const { data } = await api.post('/ai/scan', formData, { timeout: 100000 });
+    return data.data;
   }
 
-  const fileName = uploadUri.split('/').pop() || 'crop.jpg';
-  const safeName = fileName.match(/\.(jpg|jpeg)$/i)
-    ? fileName
-    : fileName.replace(/\.\w+$/, '') + '.jpg';
+  // ── Native (iOS + Android) path ─────────────────────────────────────────────
+  // On Android New Architecture (newArchEnabled=true, RN 0.76+) both the
+  // { uri, name, type } FormData pattern AND fetch('file://...') silently fail
+  // because OkHttp/Turbo networking doesn't support file:// scheme in JS.
+  // FileSystem.uploadAsync is a dedicated native upload API that handles file://
+  // and content:// URIs correctly on both iOS and Android (all architectures).
 
-  const formData = new FormData();
+  let uploadUri = imageUri;
+  try {
+    const compressed = await compressImage(imageUri);
+    uploadUri = compressed?.uri || imageUri;
+  } catch (compressErr) {
+    console.warn('[scanCropImage] compression failed, using original:', compressErr?.message);
+  }
 
-  // On React Native New Architecture (RN 0.76+, newArchEnabled=true), the
-  // { uri, name, type } FormData pattern silently fails on Android — the
-  // networking module drops the file before sending and nothing reaches the
-  // backend.  Using fetch(uri) → Blob works on all platforms (iOS, Android,
-  // web) and is the safe unified approach.
-  const resp = await fetch(uploadUri);
-  const blob = await resp.blob();
-  formData.append('image', blob, safeName);
+  const token = await getAccessToken();
 
-  formData.append('farmContext', JSON.stringify(farmContext));
+  const uploadResult = await FileSystem.uploadAsync(
+    `${API_BASE_URL}/ai/scan`,
+    uploadUri,
+    {
+      httpMethod:  'POST',
+      uploadType:  FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName:   'image',
+      mimeType:    'image/jpeg',
+      headers:     token ? { Authorization: `Bearer ${token}` } : {},
+      parameters:  { farmContext: JSON.stringify(farmContext) },
+    },
+  );
 
-  // Do NOT set Content-Type manually — the api.js interceptor removes it for
-  // FormData so React Native's native networking sets the correct
-  // multipart/form-data; boundary=... value automatically.
-  const { data } = await api.post('/ai/scan', formData, {
-    timeout: 100000, // 100 s — backend Gemini call has 90 s hard cap; add 10 s for network
-  });
-  return data.data;
+  if (uploadResult.status < 200 || uploadResult.status >= 300) {
+    let errBody;
+    try { errBody = JSON.parse(uploadResult.body); } catch { errBody = {}; }
+    const e = new Error(errBody?.error?.message || `HTTP ${uploadResult.status}`);
+    e.status = uploadResult.status;
+    e.response = { status: uploadResult.status, data: errBody };
+    throw e;
+  }
+
+  const json = JSON.parse(uploadResult.body);
+  return json.data;
 }
 
 /**

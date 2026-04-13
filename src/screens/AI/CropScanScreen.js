@@ -311,11 +311,10 @@ export default function CropScanScreen({ navigation }) {
       }, 800);
     } catch (err) {
       timers.forEach(timer => clearTimeout(timer));
-      console.error('[Scan] API error:', err?.message,
-        'status=', err?.response?.status,
-        'sessionExpired=', err?.sessionExpired,
-        'data=', JSON.stringify(err?.response?.data)?.slice(0, 300));
-      const status = err?.response?.status;
+      // Show full error detail on-screen so it's visible without USB/adb
+      const debugDetail = `${err?.message || 'unknown'} | status=${err?.response?.status ?? err?.status ?? 'none'}`;
+      console.error('[Scan] error:', debugDetail);
+      const status = err?.response?.status ?? err?.status;
       const msg = err?.sessionExpired
         ? 'Session expired. Please log out and log back in.'
         : status === 429
@@ -324,7 +323,7 @@ export default function CropScanScreen({ navigation }) {
         ? 'AI service is warming up. Please wait 30 seconds and try again.'
         : status === 401
         ? 'Session expired. Please log out and log back in.'
-        : t('cropScan.scanFailed');
+        : `${t('cropScan.scanFailed')}\n\n[${debugDetail}]`;
       setAnalysisError(msg);
     }
   };
