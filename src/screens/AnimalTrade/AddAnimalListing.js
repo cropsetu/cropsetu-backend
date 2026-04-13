@@ -116,11 +116,7 @@ export default function AddAnimalListing({ navigation }) {
       for (const photo of photos) {
         const { uri: compressedUri } = await compressImage(photo.uri);
         const filename = `photo_${Date.now()}.jpg`;
-        // Use fetch→Blob instead of { uri, name, type } — the latter silently
-        // fails on Android with React Native New Architecture (newArchEnabled=true).
-        const photoResp = await fetch(compressedUri);
-        const photoBlob = await photoResp.blob();
-        formData.append('images', photoBlob, filename);
+        formData.append('images', { uri: compressedUri, name: filename, type: 'image/jpeg' });
       }
 
       await api.post('/animals', formData, {
