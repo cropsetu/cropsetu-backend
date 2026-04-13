@@ -70,9 +70,16 @@ export async function scanCropImage(imageUri, farmContext = {}, pickerMimeType =
   let type = 'image/jpeg';
 
   if (!isWeb) {
-    const compressed = await compressImage(imageUri);
-    uploadUri = compressed.uri;
-    // compressImage always outputs JPEG regardless of source format
+    try {
+      const compressed = await compressImage(imageUri);
+      // Guard: if compression returns no URI, fall back to original
+      uploadUri = compressed?.uri || imageUri;
+    } catch (compressErr) {
+      // Compression failed (native module crash, out of memory, etc.).
+      // Fall back to the original image — multer accepts up to 10 MB.
+      console.warn('[scanCropImage] compression failed, using original image:', compressErr?.message);
+      uploadUri = imageUri;
+    }
     type = 'image/jpeg';
   } else {
     // Web path: keep original URI; determine MIME from picker or extension
@@ -104,7 +111,7 @@ export async function scanCropImage(imageUri, farmContext = {}, pickerMimeType =
   // FormData so React Native's native networking sets the correct
   // multipart/form-data; boundary=... value automatically.
   const { data } = await api.post('/ai/scan', formData, {
-    timeout: 200000, // 3.3 min — 5-agent pipeline can be slow on cold start
+    timeout: 100000, // 100 s — backend Gemini call has 90 s hard cap; add 10 s for network
   });
   return data.data;
 }
