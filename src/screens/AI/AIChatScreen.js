@@ -15,6 +15,7 @@ import {
 } from '../../services/aiApi';
 import { useFarm } from '../../context/FarmContext';
 import { useLanguage } from '../../context/LanguageContext';
+import { WebView } from 'react-native-webview';
 
 const { width: W, height: H } = Dimensions.get('window');
 
@@ -41,73 +42,206 @@ const V_BORD  = 'rgba(34,197,94,0.18)';
 const V_TEXT  = '#F0FDF4';
 const V_MUTED = 'rgba(134,239,172,0.55)';
 
-// ─── Orbital Particle Sphere ──────────────────────────────────────────────────
-const SPHERE_H  = H * 0.46;
-const SPHERE_CX = W / 2;
-const SPHERE_CY = SPHERE_H / 2;
-const SPHERE_R  = Math.min(W, SPHERE_H) * 0.40;
-const N_STEPS   = 17;
-const IN_RANGE  = Array.from({ length: N_STEPS }, (_, i) => i / (N_STEPS - 1));
+// ─── Particle Word Sphere (WebView canvas — Fibonacci sphere → text morphing) ──
+const SPHERE_H = H * 0.46;
 
-const RING_DEFS = [
-  { frac: 0.22, count: 6,  dur: 2600,  color: P_LIGHT,    size: 6 },
-  { frac: 0.38, count: 8,  dur: 3800,  color: '#4ADE80',  size: 5 },
-  { frac: 0.54, count: 10, dur: 5200,  color: A_LIGHT,    size: 4 },
-  { frac: 0.68, count: 12, dur: 6800,  color: '#2DD4BF',  size: 3.5 },
-  { frac: 0.82, count: 14, dur: 8400,  color: '#06B6D4',  size: 3 },
-  { frac: 1.00, count: 18, dur: 10200, color: '#38BDF8',  size: 2 },
-];
+// Minified HTML+JS for the particle word visualizer.
+// Rendering pipeline: Fibonacci sphere (idle) → off-screen canvas text sampling
+// → Fisher-Yates shuffled pixel targets → spring physics → perspective projection
+// Messages accepted: {type:'listening',value:bool}, {type:'audioLevel',value:0-1},
+//                    {type:'transcript',value:string}, {type:'reset'}
+const PARTICLE_WORD_HTML = `<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:transparent;overflow:hidden;height:100vh;width:100vw;}
+canvas{position:fixed;inset:0;width:100%;height:100%;}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+  var canvas=document.getElementById('c');
+  var ctx=canvas.getContext('2d');
+  var W,H,CX,CY,dpr;
+  var appState=0,isListening=false,audioLevel=0,t=0,rotY=0;
+  var N=6000;
+  var px=new Float32Array(N),py=new Float32Array(N),pz=new Float32Array(N);
+  var vx=new Float32Array(N),vy=new Float32Array(N),vz=new Float32Array(N);
+  var tx=new Float32Array(N),ty=new Float32Array(N),tz=new Float32Array(N);
+  var hue=new Float32Array(N),phase=new Float32Array(N);
+  var PHI=Math.PI*(1+Math.sqrt(5)),FOV=450,CAM=500;
 
-function buildRings() {
-  return RING_DEFS.map(def => {
-    const radius = SPHERE_R * def.frac;
-    const anim   = new Animated.Value(0);
-    const particles = Array.from({ length: def.count }, (_, pi) => {
-      const ph = pi / def.count;
-      return {
-        translateX: anim.interpolate({ inputRange: IN_RANGE, outputRange: IN_RANGE.map(t => Math.cos((t + ph) * 2 * Math.PI) * radius) }),
-        translateY: anim.interpolate({ inputRange: IN_RANGE, outputRange: IN_RANGE.map(t => Math.sin((t + ph) * 2 * Math.PI) * radius) }),
-      };
-    });
-    return { ...def, radius, anim, particles };
-  });
-}
+  function resize(){
+    dpr=window.devicePixelRatio||1;W=window.innerWidth;H=window.innerHeight;
+    CX=W/2;CY=H/2;canvas.width=W*dpr;canvas.height=H*dpr;
+    canvas.style.width=W+'px';canvas.style.height=H+'px';
+    ctx.scale(dpr,dpr);
+    if(appState===0)initSphere();
+  }
 
-function VoiceSphere({ isListening, audioLevel }) {
-  const ringsRef    = useRef(null);
-  if (!ringsRef.current) ringsRef.current = buildRings();
-  const rings       = ringsRef.current;
-  const glowScale   = useRef(new Animated.Value(1)).current;
-  const glowOpacity = useRef(new Animated.Value(0.18)).current;
-  const dotOpacity  = useRef(new Animated.Value(0.55)).current;
+  function initSphere(){
+    var R=Math.min(W,H)*0.38;
+    for(var i=0;i<N;i++){
+      var p=Math.acos(1-2*(i+0.5)/N),a=PHI*i;
+      tx[i]=Math.sin(p)*Math.cos(a)*R;
+      ty[i]=Math.sin(p)*Math.sin(a)*R;
+      tz[i]=Math.cos(p)*R;
+    }
+  }
+
+  function initParticles(){
+    for(var i=0;i<N;i++){
+      px[i]=(Math.random()-.5)*W*2;py[i]=(Math.random()-.5)*H*2;pz[i]=(Math.random()-.5)*800;
+      vx[i]=vy[i]=vz[i]=0;hue[i]=120+(i/N)*55;phase[i]=Math.random()*Math.PI*2;
+    }
+  }
+
+  function sampleText(phrase){
+    var fW=Math.floor(W),fH=Math.floor(H);
+    var off=document.createElement('canvas');off.width=fW;off.height=fH;
+    var c2=off.getContext('2d');
+    var words=phrase.split(' ');var lines=[];var cur='';
+    var maxC=phrase.length>20?10:16;
+    for(var wi=0;wi<words.length;wi++){
+      var w=words[wi];
+      if((cur+w).length>maxC){lines.push(cur.trim());cur=w+' ';}else cur+=w+' ';
+    }
+    lines.push(cur.trim());
+    var fs=Math.min(fW*0.65/(maxC*0.5),fH*0.45/lines.length,140);
+    if(phrase.length>25)fs*=0.8;
+    c2.fillStyle='#fff';c2.font='900 '+fs+'px Arial';c2.textAlign='center';c2.textBaseline='middle';
+    var lh=fs*1.1,sy=fH/2-((lines.length-1)*lh/2);
+    for(var li=0;li<lines.length;li++)c2.fillText(lines[li],fW/2,sy+li*lh);
+    var d=c2.getImageData(0,0,fW,fH).data;
+    var pts=[];var step=phrase.length>30?2:1;
+    for(var y=0;y<fH;y+=step)for(var x=0;x<fW;x+=step)
+      if(d[(y*fW+x)*4+3]>120)pts.push(x-fW/2+(Math.random()-.5)*.8,y-fH/2+(Math.random()-.5)*.8);
+    for(var i=pts.length/2-1;i>0;i--){
+      var j=Math.floor(Math.random()*(i+1));var ia=i*2,ja=j*2;
+      var tmp=pts[ia];pts[ia]=pts[ja];pts[ja]=tmp;
+      tmp=pts[ia+1];pts[ia+1]=pts[ja+1];pts[ja+1]=tmp;
+    }
+    return pts;
+  }
+
+  function formWord(phrase){
+    if(!phrase.trim())return;
+    appState=1;
+    var pts=sampleText(phrase);var pc=pts.length/2;
+    for(var i=0;i<N;i++){var idx=(i%pc)*2;tx[i]=pts[idx];ty[i]=pts[idx+1];tz[i]=0;}
+    rotY=0;
+    setTimeout(function(){if(appState===1)appState=2;},2000);
+  }
+
+  function resetSphere(){appState=0;initSphere();}
+
+  function update(){
+    t+=0.005;
+    if(appState===0)rotY+=isListening?0.012:0.006;
+    var jitter=appState===0?(isListening?2.5+audioLevel*8:1.8):0;
+    var breathe=appState===0&&isListening?Math.sin(t*3)*0.15:0;
+    for(var i=0;i<N;i++){
+      var bx=tx[i]*(1+breathe),by=ty[i]*(1+breathe),bz=tz[i]*(1+breathe);
+      var cY2=Math.cos(rotY),sY2=Math.sin(rotY);
+      var rx=bx*cY2-bz*sY2,ry=by,rz=bx*sY2+bz*cY2;
+      if(appState===0){
+        rx+=Math.sin(t*8+phase[i])*jitter;ry+=Math.cos(t*9+phase[i])*jitter;rz+=Math.sin(t*7+phase[i]*2)*jitter;
+        if(isListening&&audioLevel>0.3){var f=(audioLevel-0.3)*6;rx+=Math.sin(phase[i]*3)*f;ry+=Math.cos(phase[i]*5)*f;}
+      }
+      var sp=appState===0?0.02:0.022;
+      vx[i]+=(rx-px[i])*sp;vy[i]+=(ry-py[i])*sp;vz[i]+=(rz-pz[i])*sp;
+      vx[i]*=0.82;vy[i]*=0.82;vz[i]*=0.82;
+      px[i]+=vx[i];py[i]+=vy[i];pz[i]+=vz[i];
+    }
+  }
+
+  function draw(){
+    ctx.fillStyle='rgba(7,16,9,0.22)';ctx.fillRect(0,0,W,H);
+    for(var i=0;i<N;i++){
+      var z=pz[i]+CAM;if(z<10)continue;
+      var sc=FOV/z,sx=px[i]*sc+CX,sy2=py[i]*sc+CY;
+      var spd=Math.sqrt(vx[i]*vx[i]+vy[i]*vy[i]+vz[i]*vz[i]);
+      var a=Math.min(1,(0.18+spd*0.1)*(sc*0.65));
+      var sz=(0.4+spd*0.12)*sc;
+      var h,s,l;
+      if(appState>=1){h=142;s=90;l=75;a=Math.min(1,a*1.5);sz*=0.9;}
+      else{
+        h=(hue[i]+t*25)%360;
+        s=isListening?85+audioLevel*15:80;l=isListening?65+audioLevel*20:70;
+        if(isListening){a=Math.min(1,a*(1.2+audioLevel*0.8));sz*=(1+audioLevel*0.5);}
+      }
+      ctx.beginPath();ctx.arc(sx,sy2,sz,0,6.2832);
+      ctx.fillStyle='hsla('+h+','+s+'%,'+l+'%,'+a+')';ctx.fill();
+    }
+    if(appState===0&&isListening){
+      var gr=80+audioLevel*60;
+      var grd=ctx.createRadialGradient(CX,CY,0,CX,CY,gr);
+      grd.addColorStop(0,'rgba(22,163,74,'+(0.08+audioLevel*0.12)+')');
+      grd.addColorStop(0.5,'rgba(13,148,136,'+(0.04+audioLevel*0.06)+')');
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.beginPath();ctx.arc(CX,CY,gr,0,6.2832);ctx.fillStyle=grd;ctx.fill();
+    }
+  }
+
+  function loop(){update();draw();requestAnimationFrame(loop);}
+
+  function onMsg(e){
+    try{
+      var raw=typeof e==='string'?e:(e.data||'');
+      var d=JSON.parse(raw);
+      if(d.type==='listening')isListening=d.value;
+      if(d.type==='audioLevel')audioLevel=d.value;
+      if(d.type==='transcript')formWord(d.value||'');
+      if(d.type==='reset')resetSphere();
+    }catch(err){}
+  }
+  document.addEventListener('message',onMsg);
+  window.addEventListener('message',onMsg);
+
+  resize();initParticles();loop();
+  window.addEventListener('resize',function(){ctx.resetTransform();resize();});
+})();
+</script>
+</body>
+</html>`;
+
+function ParticleWordSphere({ isListening, audioLevel, transcript }) {
+  const wvRef = useRef(null);
 
   useEffect(() => {
-    const loops = rings.map(ring =>
-      Animated.loop(Animated.timing(ring.anim, { toValue: 1, duration: ring.dur, easing: Easing.linear, useNativeDriver: true }))
-    );
-    const glowLoop = Animated.loop(Animated.sequence([
-      Animated.timing(glowScale, { toValue: 1.45, duration: 1400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(glowScale, { toValue: 0.80, duration: 1400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]));
-    loops.forEach(l => l.start());
-    glowLoop.start();
-    return () => { loops.forEach(l => l.stop()); glowLoop.stop(); };
-  }, []);
+    wvRef.current?.postMessage(JSON.stringify({ type: 'listening', value: isListening }));
+  }, [isListening]);
 
   useEffect(() => {
-    Animated.spring(dotOpacity,  { toValue: isListening ? 0.75 + audioLevel * 0.25 : 0.55, speed: 20, bounciness: 3, useNativeDriver: true }).start();
-    Animated.spring(glowOpacity, { toValue: isListening ? 0.30 + audioLevel * 0.25 : 0.18, speed: 20, bounciness: 3, useNativeDriver: true }).start();
-  }, [isListening, audioLevel]);
+    wvRef.current?.postMessage(JSON.stringify({ type: 'audioLevel', value: audioLevel }));
+  }, [audioLevel]);
+
+  useEffect(() => {
+    if (transcript) {
+      wvRef.current?.postMessage(JSON.stringify({ type: 'transcript', value: transcript }));
+    } else {
+      wvRef.current?.postMessage(JSON.stringify({ type: 'reset' }));
+    }
+  }, [transcript]);
 
   return (
     <View style={{ width: W, height: SPHERE_H }}>
-      <Animated.View style={{ position: 'absolute', width: 72, height: 72, borderRadius: 36, left: SPHERE_CX - 36, top: SPHERE_CY - 36, backgroundColor: P_LIGHT, opacity: glowOpacity, transform: [{ scale: glowScale }], shadowColor: P_LIGHT, shadowRadius: 32, shadowOpacity: 1, elevation: 10 }} />
-      <View style={{ position: 'absolute', width: 16, height: 16, borderRadius: 8, left: SPHERE_CX - 8, top: SPHERE_CY - 8, backgroundColor: '#fff', opacity: 0.7 }} />
-      {rings.map((ring, ri) =>
-        ring.particles.map((p, pi) => (
-          <Animated.View key={`${ri}-${pi}`} style={{ position: 'absolute', width: ring.size, height: ring.size, borderRadius: ring.size / 2, backgroundColor: ring.color, left: SPHERE_CX - ring.size / 2, top: SPHERE_CY - ring.size / 2, opacity: dotOpacity, transform: [{ translateX: p.translateX }, { translateY: p.translateY }] }} />
-        ))
-      )}
+      <WebView
+        ref={wvRef}
+        source={{ html: PARTICLE_WORD_HTML }}
+        style={{ flex: 1, backgroundColor: 'transparent' }}
+        scrollEnabled={false}
+        bounces={false}
+        overScrollMode="never"
+        javaScriptEnabled
+        originWhitelist={['*']}
+        backgroundColor="transparent"
+        allowsInlineMediaPlayback
+      />
     </View>
   );
 }
@@ -150,8 +284,13 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
         <View style={{ width: 44 }} />
       </View>
 
-      {/* Sphere */}
-      <VoiceSphere isListening={isRecording} audioLevel={audioLevel} />
+      {/* Particle Word Sphere: idle=rotating Fibonacci sphere, listening=audio-reactive,
+          transcription received=particles morph into the spoken text */}
+      <ParticleWordSphere
+        isListening={isRecording}
+        audioLevel={audioLevel}
+        transcript={voiceResult?.transcription || ''}
+      />
 
       {/* Status */}
       <View style={[VM.statusPill, isRecording && VM.statusPillActive]}>
@@ -722,9 +861,9 @@ const S = StyleSheet.create({
   dotsRow: { flexDirection: 'row', gap: 5, alignItems: 'center', height: 20 },
   dot:     { width: 7, height: 7, borderRadius: 4, backgroundColor: PRIMARY },
 
-  chipsList: { paddingHorizontal: 14, paddingVertical: 6, gap: 7, backgroundColor: CHAT_BG },
-  chip:      { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 },
-  chipText:  { fontSize: 12, color: TEXT2, fontWeight: '500' },
+  chipsList: { paddingHorizontal: 14, paddingVertical: 8, gap: 8, backgroundColor: CHAT_BG },
+  chip:      { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 },
+  chipText:  { fontSize: 13, color: TEXT2, fontWeight: '500' },
 
   inputBar: { backgroundColor: BG, paddingHorizontal: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: BORDER },
   inputRow: {
