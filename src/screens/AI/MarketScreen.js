@@ -211,7 +211,7 @@ function CropPickerModal({ visible, selected, onSelect, onClose }) {
             <Ionicons name="checkmark" size={9} color="#FFF" />
           </View>
         )}
-        <CropIcon crop={item} size={52} />
+        <CropIcon crop={item} size={60} />
         <Text style={[M.cropTileText, isSelected && M.cropTileTextActive]} numberOfLines={2}>
           {item}
         </Text>
@@ -653,7 +653,7 @@ export default function MarketScreen({ navigation }) {
       <Pressable style={M.cropSelector} onPress={() => setPickerVisible(true)}>
         <View style={M.cropSelectorLeft}>
           <View style={M.cropSelectorIcon}>
-            <CropIcon crop={selectedCrop} size={32} />
+            <CropIcon crop={selectedCrop} size={38} />
           </View>
           <View>
             <Text style={M.cropSelectorLabel}>Selected Crop</Text>
@@ -1300,7 +1300,7 @@ const M = StyleSheet.create({
     backgroundColor: '#F8FAFC',
     borderRadius: 14, borderWidth: 1, borderColor: BORDER,
     paddingVertical: 10, paddingHorizontal: 4,
-    minHeight: 100, gap: 4,
+    minHeight: 108, gap: 5,
   },
   cropTileActive: { backgroundColor: '#F0FDF4', borderColor: GREEN },
   cropTileText:   { fontSize: 12, color: SLATE, fontWeight: '600', textAlign: 'center' },
