@@ -5,7 +5,6 @@ import {
   ActivityIndicator, StatusBar, Dimensions, Alert, Easing,
   ScrollView,
 } from 'react-native';
-import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -35,147 +34,126 @@ const USER_A   = '#16A34A';
 const USER_B   = '#0D9488';
 const DANGER   = '#EF4444';
 
-// ─── Particle Sphere HTML ─────────────────────────────────────────────────────
-// 6 000-particle Fibonacci sphere rendered on canvas (60 fps, zero GC).
-// Green-teal idle → lime/cyan listening, audio-reactive explosion.
-const PARTICLE_HTML = `
-<!DOCTYPE html><html>
-<head>
-<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
-<style>
-  *{margin:0;padding:0;box-sizing:border-box}
-  body{background:transparent;overflow:hidden;height:100vh;width:100vw}
-  canvas{position:fixed;inset:0;width:100%;height:100%}
-</style>
-</head><body>
-<canvas id="c"></canvas>
-<script>
-(function(){
-  const canvas=document.getElementById('c');
-  const ctx=canvas.getContext('2d');
-  let W,H,CX,CY,dpr;
-  let isListening=false,audioLevel=0;
+// ─── Orbital Particle Sphere (pure Animated — no native modules needed) ───────
+// 78 particles across 6 rings, all running on native thread via useNativeDriver.
+// Pre-computed circular interpolations so zero JS work per frame.
+const SPHERE_H   = H * 0.46;
+const SPHERE_CX  = W / 2;
+const SPHERE_CY  = SPHERE_H / 2;
+const SPHERE_R   = Math.min(W, SPHERE_H) * 0.40;
+const N_STEPS    = 17; // keyframe resolution per orbit
+const INPUT_RANGE = Array.from({ length: N_STEPS }, (_, i) => i / (N_STEPS - 1));
 
-  function resize(){
-    dpr=window.devicePixelRatio||1;
-    W=window.innerWidth; H=window.innerHeight;
-    CX=W/2; CY=H/2;
-    canvas.width=W*dpr; canvas.height=H*dpr;
-    canvas.style.width=W+'px'; canvas.style.height=H+'px';
-    ctx.scale(dpr,dpr); initSphereTargets();
-  }
+// Ring definitions: frac = fraction of SPHERE_R
+const RING_DEFS = [
+  { frac: 0.22, count: 6,  dur: 2600, color: PRIMARY,   size: 6 },
+  { frac: 0.38, count: 8,  dur: 3800, color: P_LIGHT,   size: 5 },
+  { frac: 0.54, count: 10, dur: 5200, color: ACCENT,    size: 4 },
+  { frac: 0.68, count: 12, dur: 6800, color: A_LIGHT,   size: 3.5 },
+  { frac: 0.82, count: 14, dur: 8400, color: '#06B6D4', size: 3 },
+  { frac: 1.00, count: 18, dur: 10200, color: '#38BDF8', size: 2 },
+];
 
-  const N=6000;
-  const px=new Float32Array(N),py=new Float32Array(N),pz=new Float32Array(N);
-  const vx=new Float32Array(N),vy=new Float32Array(N),vz=new Float32Array(N);
-  const tx=new Float32Array(N),ty=new Float32Array(N),tz=new Float32Array(N);
-  const hue=new Float32Array(N),phase=new Float32Array(N);
-  let t=0,rotY=0;
-  const PHI=Math.PI*(1+Math.sqrt(5)),FOV=450,CAM_Z=500;
+// Build rings + pre-compute all interpolations once (never recomputed)
+function buildRings() {
+  return RING_DEFS.map(def => {
+    const radius = SPHERE_R * def.frac;
+    const anim   = new Animated.Value(0);
+    const particles = Array.from({ length: def.count }, (_, pi) => {
+      const phaseFrac = pi / def.count;
+      const xOut = INPUT_RANGE.map(t => Math.cos((t + phaseFrac) * 2 * Math.PI) * radius);
+      const yOut = INPUT_RANGE.map(t => Math.sin((t + phaseFrac) * 2 * Math.PI) * radius);
+      return {
+        translateX: anim.interpolate({ inputRange: INPUT_RANGE, outputRange: xOut }),
+        translateY: anim.interpolate({ inputRange: INPUT_RANGE, outputRange: yOut }),
+      };
+    });
+    return { ...def, radius, anim, particles };
+  });
+}
 
-  function initSphereTargets(){
-    const R=Math.min(W,H)*0.32;
-    for(let i=0;i<N;i++){
-      const polar=Math.acos(1-2*(i+0.5)/N),azim=PHI*i;
-      tx[i]=Math.sin(polar)*Math.cos(azim)*R;
-      ty[i]=Math.sin(polar)*Math.sin(azim)*R;
-      tz[i]=Math.cos(polar)*R;
-    }
-  }
+// ── Sphere component ──────────────────────────────────────────────────────────
+function VoiceSphere({ isListening, audioLevel }) {
+  const ringsRef = useRef(null);
+  if (!ringsRef.current) ringsRef.current = buildRings();
+  const rings = ringsRef.current;
 
-  function initParticles(){
-    for(let i=0;i<N;i++){
-      px[i]=(Math.random()-.5)*W*2;
-      py[i]=(Math.random()-.5)*H*2;
-      pz[i]=(Math.random()-.5)*800;
-      vx[i]=vy[i]=vz[i]=0;
-      hue[i]=120+(i/N)*55;   // green 120 → teal 175
-      phase[i]=Math.random()*Math.PI*2;
-    }
-  }
+  const glowScale   = useRef(new Animated.Value(1)).current;
+  const glowOpacity = useRef(new Animated.Value(0.18)).current;
+  const dotOpacity  = useRef(new Animated.Value(0.55)).current;
 
-  function update(){
-    t+=0.005;
-    rotY+=isListening?0.012:0.006;
-    const jitter=isListening?2.5+audioLevel*8:1.5;
-    const breathe=isListening?Math.sin(t*3)*0.15:Math.sin(t*1.5)*0.05;
-    for(let i=0;i<N;i++){
-      let cx=tx[i]*(1+breathe),cy=ty[i]*(1+breathe),cz=tz[i]*(1+breathe);
-      const cosY=Math.cos(rotY),sinY=Math.sin(rotY);
-      let tX=cx*cosY-cz*sinY,tY=cy,tZ=cx*sinY+cz*cosY;
-      tX+=Math.sin(t*8+phase[i])*jitter;
-      tY+=Math.cos(t*9+phase[i])*jitter;
-      tZ+=Math.sin(t*7+phase[i]*2)*jitter;
-      if(isListening&&audioLevel>0.3){
-        const ef=(audioLevel-0.3)*6;
-        tX+=Math.sin(phase[i]*3)*ef;
-        tY+=Math.cos(phase[i]*5)*ef;
-      }
-      const sp=0.025;
-      vx[i]+=(tX-px[i])*sp; vy[i]+=(tY-py[i])*sp; vz[i]+=(tZ-pz[i])*sp;
-      vx[i]*=0.82; vy[i]*=0.82; vz[i]*=0.82;
-      px[i]+=vx[i]; py[i]+=vy[i]; pz[i]+=vz[i];
-    }
-  }
+  // Start all ring loops once
+  useEffect(() => {
+    const loops = rings.map(ring =>
+      Animated.loop(
+        Animated.timing(ring.anim, {
+          toValue: 1, duration: ring.dur,
+          easing: Easing.linear, useNativeDriver: true,
+        })
+      )
+    );
+    const glowLoop = Animated.loop(Animated.sequence([
+      Animated.timing(glowScale, { toValue: 1.45, duration: 1400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(glowScale, { toValue: 0.80, duration: 1400, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    loops.forEach(l => l.start());
+    glowLoop.start();
+    return () => { loops.forEach(l => l.stop()); glowLoop.stop(); };
+  }, []);
 
-  function draw(){
-    ctx.fillStyle='rgba(7,16,9,0.28)';
-    ctx.fillRect(0,0,W,H);
-    for(let i=0;i<N;i++){
-      const zPos=pz[i]+CAM_Z;
-      if(zPos<10) continue;
-      const sc=FOV/zPos;
-      const sx=px[i]*sc+CX,sy=py[i]*sc+CY;
-      const spd=Math.sqrt(vx[i]*vx[i]+vy[i]*vy[i]+vz[i]*vz[i]);
-      let a=Math.min(1,(0.2+spd*0.1)*(sc*0.65));
-      let size=(0.4+spd*0.12)*sc;
-      let h,s,l;
-      if(isListening){
-        // lime-green to cyan range when active
-        const base=hue[i];
-        h=90+((base-120+t*35+audioLevel*50)%70+70)%70;
-        s=85+audioLevel*15; l=65+audioLevel*20;
-        a=Math.min(1,a*(1.2+audioLevel*0.8));
-        size*=(1+audioLevel*0.5);
-      } else {
-        // steady green-teal cycle
-        h=120+((hue[i]-120+t*12)%55+55)%55;
-        s=75; l=68;
-      }
-      ctx.beginPath();
-      ctx.arc(sx,sy,size,0,6.2832);
-      ctx.fillStyle='hsla('+h+','+s+'%,'+l+'%,'+a+')';
-      ctx.fill();
-    }
-    if(isListening){
-      const gr=80+audioLevel*60;
-      const grd=ctx.createRadialGradient(CX,CY,0,CX,CY,gr);
-      grd.addColorStop(0,'rgba(34,197,94,'+(0.10+audioLevel*0.14)+')');
-      grd.addColorStop(0.5,'rgba(20,184,166,'+(0.05+audioLevel*0.07)+')');
-      grd.addColorStop(1,'rgba(0,0,0,0)');
-      ctx.beginPath(); ctx.arc(CX,CY,gr,0,6.2832);
-      ctx.fillStyle=grd; ctx.fill();
-    }
-  }
+  // React to listening + audioLevel
+  useEffect(() => {
+    Animated.spring(dotOpacity, {
+      toValue: isListening ? 0.75 + audioLevel * 0.25 : 0.55,
+      speed: 20, bounciness: 3, useNativeDriver: true,
+    }).start();
+    Animated.spring(glowOpacity, {
+      toValue: isListening ? 0.30 + audioLevel * 0.25 : 0.18,
+      speed: 20, bounciness: 3, useNativeDriver: true,
+    }).start();
+  }, [isListening, audioLevel]);
 
-  function loop(){ update(); draw(); requestAnimationFrame(loop); }
+  return (
+    <View style={{ width: W, height: SPHERE_H }}>
+      {/* Central glow orb */}
+      <Animated.View style={{
+        position: 'absolute',
+        width: 72, height: 72, borderRadius: 36,
+        left: SPHERE_CX - 36, top: SPHERE_CY - 36,
+        backgroundColor: PRIMARY,
+        opacity: glowOpacity,
+        transform: [{ scale: glowScale }],
+        shadowColor: PRIMARY, shadowRadius: 32, shadowOpacity: 1, elevation: 10,
+      }} />
+      {/* Inner bright dot */}
+      <View style={{
+        position: 'absolute',
+        width: 16, height: 16, borderRadius: 8,
+        left: SPHERE_CX - 8, top: SPHERE_CY - 8,
+        backgroundColor: '#fff', opacity: 0.7,
+      }} />
 
-  function onMsg(e){
-    try{
-      const d=JSON.parse(e.data);
-      if(d.type==='listening') isListening=d.value;
-      if(d.type==='audioLevel') audioLevel=d.value;
-    }catch(err){}
-  }
-  document.addEventListener('message',onMsg);
-  window.addEventListener('message',onMsg);
-
-  resize(); initParticles(); loop();
-  window.addEventListener('resize',function(){ ctx.resetTransform(); resize(); });
-})();
-</script>
-</body></html>
-`;
+      {/* Orbiting particles — all native-thread animated */}
+      {rings.map((ring, ri) =>
+        ring.particles.map((p, pi) => (
+          <Animated.View
+            key={`${ri}-${pi}`}
+            style={{
+              position: 'absolute',
+              width: ring.size, height: ring.size,
+              borderRadius: ring.size / 2,
+              backgroundColor: ring.color,
+              left: SPHERE_CX - ring.size / 2,
+              top:  SPHERE_CY - ring.size / 2,
+              opacity: dotOpacity,
+              transform: [{ translateX: p.translateX }, { translateY: p.translateY }],
+            }}
+          />
+        ))
+      )}
+    </View>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Sub-components
@@ -345,24 +323,15 @@ function MessageBubble({ msg, onBuyMedicine }) {
   );
 }
 
-// ── WebView particle sphere voice visualiser ───────────────────────────────
+// ── Voice tab full-screen view ─────────────────────────────────────────────
 function VoiceParticleView({ isRecording, isProcessing, audioLevel, recordDuration,
   voiceResult, onStart, onSend, onCancel, onViewChat }) {
-  const webViewRef = useRef(null);
-  const fadeAnim   = useRef(new Animated.Value(0)).current;
-  const transFade  = useRef(new Animated.Value(0)).current;
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+  const transFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }).start();
   }, []);
-
-  useEffect(() => {
-    webViewRef.current?.postMessage(JSON.stringify({ type: 'listening', value: isRecording }));
-  }, [isRecording]);
-
-  useEffect(() => {
-    webViewRef.current?.postMessage(JSON.stringify({ type: 'audioLevel', value: audioLevel }));
-  }, [audioLevel]);
 
   useEffect(() => {
     if (voiceResult?.transcription) {
@@ -378,21 +347,8 @@ function VoiceParticleView({ isRecording, isProcessing, audioLevel, recordDurati
 
   return (
     <Animated.View style={[VP.root, { opacity: fadeAnim }]}>
-      {/* Sphere canvas */}
-      <View style={VP.canvasWrap}>
-        <WebView
-          ref={webViewRef}
-          source={{ html: PARTICLE_HTML }}
-          style={VP.webView}
-          scrollEnabled={false}
-          bounces={false}
-          overScrollMode="never"
-          javaScriptEnabled
-          originWhitelist={['*']}
-          backgroundColor={BG}
-          allowsInlineMediaPlayback
-        />
-      </View>
+      {/* Orbital particle sphere — pure Animated, no native modules */}
+      <VoiceSphere isListening={isRecording} audioLevel={audioLevel} />
 
       {/* Status pill */}
       <View style={[VP.statusPill, isRecording && VP.statusPillActive]}>
@@ -1061,8 +1017,6 @@ const S = StyleSheet.create({
 // ── Voice particle view styles ─────────────────────────────────────────────
 const VP = StyleSheet.create({
   root: { flex: 1, alignItems: 'center', justifyContent: 'space-between', paddingBottom: 32 },
-  canvasWrap: { width: W, height: H * 0.48, overflow: 'hidden' },
-  webView: { flex: 1, backgroundColor: BG },
 
   statusPill: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
