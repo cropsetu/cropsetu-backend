@@ -917,6 +917,16 @@ export default function MarketScreen({ navigation }) {
               {mandiPrices.length > 8 && (
                 <Text style={M.updatedAt}>+ {mandiPrices.length - 8} more mandis</Text>
               )}
+              {/* Reporting note — shows when district has few results */}
+              {mandiPrices.length > 0 && mandiPrices.length <= 4 && (
+                <View style={M.reportingNote}>
+                  <Ionicons name="information-circle-outline" size={13} color={MUTED} />
+                  <Text style={M.reportingNoteTxt}>
+                    Only {mandiPrices.length} mandi{mandiPrices.length > 1 ? 's' : ''} reported prices for {selectedCrop} in this area today.
+                    Try selecting the full state (no district) for more results.
+                  </Text>
+                </View>
+              )}
             </AnimCard>
 
             {/* ── AgriPredict: Historical + Claude prediction ── */}
@@ -1413,6 +1423,8 @@ const M = StyleSheet.create({
   mandiRange:      { fontSize: 9, color: MUTED },
   mandiDiv:        { height: 1, backgroundColor: '#F1F5F9', marginHorizontal: 14 },
   updatedAt:       { fontSize: 9, color: MUTED, marginTop: 5, marginLeft: 2 },
+  reportingNote:   { flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 10, marginHorizontal: 14, padding: 10, backgroundColor: '#F8FAFC', borderRadius: 8, borderWidth: 1, borderColor: BORDER },
+  reportingNoteTxt:{ flex: 1, fontSize: 11, color: MUTED, lineHeight: 16 },
 
   // ── Ask button
   askBtn:           { borderRadius: 18, overflow: 'hidden', shadowColor: GREEN, shadowOpacity: 0.3, shadowRadius: 10, elevation: 4 },
