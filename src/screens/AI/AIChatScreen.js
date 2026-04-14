@@ -1,10 +1,11 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, KeyboardAvoidingView, Platform, Animated,
   ActivityIndicator, StatusBar, Dimensions, Alert, Easing,
   ScrollView,
 } from 'react-native';
+import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -17,7 +18,164 @@ import { useFarm } from '../../context/FarmContext';
 import { useLanguage } from '../../context/LanguageContext';
 
 const { width: W, height: H } = Dimensions.get('window');
-const GREEN = '#2ECC71';
+
+// ─── Color Tokens ─────────────────────────────────────────────────────────────
+const BG       = '#071009';
+const PRIMARY  = '#22C55E';
+const P_LIGHT  = '#4ADE80';
+const ACCENT   = '#14B8A6';
+const A_LIGHT  = '#2DD4BF';
+const GLASS    = 'rgba(34,197,94,0.07)';
+const GBORDER  = 'rgba(34,197,94,0.16)';
+const SURFACE  = 'rgba(255,255,255,0.04)';
+const TEXT     = '#F0FDF4';
+const TEXT2    = '#86EFAC';
+const MUTED    = 'rgba(134,239,172,0.5)';
+const USER_A   = '#16A34A';
+const USER_B   = '#0D9488';
+const DANGER   = '#EF4444';
+
+// ─── Particle Sphere HTML ─────────────────────────────────────────────────────
+// 6 000-particle Fibonacci sphere rendered on canvas (60 fps, zero GC).
+// Green-teal idle → lime/cyan listening, audio-reactive explosion.
+const PARTICLE_HTML = `
+<!DOCTYPE html><html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:transparent;overflow:hidden;height:100vh;width:100vw}
+  canvas{position:fixed;inset:0;width:100%;height:100%}
+</style>
+</head><body>
+<canvas id="c"></canvas>
+<script>
+(function(){
+  const canvas=document.getElementById('c');
+  const ctx=canvas.getContext('2d');
+  let W,H,CX,CY,dpr;
+  let isListening=false,audioLevel=0;
+
+  function resize(){
+    dpr=window.devicePixelRatio||1;
+    W=window.innerWidth; H=window.innerHeight;
+    CX=W/2; CY=H/2;
+    canvas.width=W*dpr; canvas.height=H*dpr;
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    ctx.scale(dpr,dpr); initSphereTargets();
+  }
+
+  const N=6000;
+  const px=new Float32Array(N),py=new Float32Array(N),pz=new Float32Array(N);
+  const vx=new Float32Array(N),vy=new Float32Array(N),vz=new Float32Array(N);
+  const tx=new Float32Array(N),ty=new Float32Array(N),tz=new Float32Array(N);
+  const hue=new Float32Array(N),phase=new Float32Array(N);
+  let t=0,rotY=0;
+  const PHI=Math.PI*(1+Math.sqrt(5)),FOV=450,CAM_Z=500;
+
+  function initSphereTargets(){
+    const R=Math.min(W,H)*0.32;
+    for(let i=0;i<N;i++){
+      const polar=Math.acos(1-2*(i+0.5)/N),azim=PHI*i;
+      tx[i]=Math.sin(polar)*Math.cos(azim)*R;
+      ty[i]=Math.sin(polar)*Math.sin(azim)*R;
+      tz[i]=Math.cos(polar)*R;
+    }
+  }
+
+  function initParticles(){
+    for(let i=0;i<N;i++){
+      px[i]=(Math.random()-.5)*W*2;
+      py[i]=(Math.random()-.5)*H*2;
+      pz[i]=(Math.random()-.5)*800;
+      vx[i]=vy[i]=vz[i]=0;
+      hue[i]=120+(i/N)*55;   // green 120 → teal 175
+      phase[i]=Math.random()*Math.PI*2;
+    }
+  }
+
+  function update(){
+    t+=0.005;
+    rotY+=isListening?0.012:0.006;
+    const jitter=isListening?2.5+audioLevel*8:1.5;
+    const breathe=isListening?Math.sin(t*3)*0.15:Math.sin(t*1.5)*0.05;
+    for(let i=0;i<N;i++){
+      let cx=tx[i]*(1+breathe),cy=ty[i]*(1+breathe),cz=tz[i]*(1+breathe);
+      const cosY=Math.cos(rotY),sinY=Math.sin(rotY);
+      let tX=cx*cosY-cz*sinY,tY=cy,tZ=cx*sinY+cz*cosY;
+      tX+=Math.sin(t*8+phase[i])*jitter;
+      tY+=Math.cos(t*9+phase[i])*jitter;
+      tZ+=Math.sin(t*7+phase[i]*2)*jitter;
+      if(isListening&&audioLevel>0.3){
+        const ef=(audioLevel-0.3)*6;
+        tX+=Math.sin(phase[i]*3)*ef;
+        tY+=Math.cos(phase[i]*5)*ef;
+      }
+      const sp=0.025;
+      vx[i]+=(tX-px[i])*sp; vy[i]+=(tY-py[i])*sp; vz[i]+=(tZ-pz[i])*sp;
+      vx[i]*=0.82; vy[i]*=0.82; vz[i]*=0.82;
+      px[i]+=vx[i]; py[i]+=vy[i]; pz[i]+=vz[i];
+    }
+  }
+
+  function draw(){
+    ctx.fillStyle='rgba(7,16,9,0.28)';
+    ctx.fillRect(0,0,W,H);
+    for(let i=0;i<N;i++){
+      const zPos=pz[i]+CAM_Z;
+      if(zPos<10) continue;
+      const sc=FOV/zPos;
+      const sx=px[i]*sc+CX,sy=py[i]*sc+CY;
+      const spd=Math.sqrt(vx[i]*vx[i]+vy[i]*vy[i]+vz[i]*vz[i]);
+      let a=Math.min(1,(0.2+spd*0.1)*(sc*0.65));
+      let size=(0.4+spd*0.12)*sc;
+      let h,s,l;
+      if(isListening){
+        // lime-green to cyan range when active
+        const base=hue[i];
+        h=90+((base-120+t*35+audioLevel*50)%70+70)%70;
+        s=85+audioLevel*15; l=65+audioLevel*20;
+        a=Math.min(1,a*(1.2+audioLevel*0.8));
+        size*=(1+audioLevel*0.5);
+      } else {
+        // steady green-teal cycle
+        h=120+((hue[i]-120+t*12)%55+55)%55;
+        s=75; l=68;
+      }
+      ctx.beginPath();
+      ctx.arc(sx,sy,size,0,6.2832);
+      ctx.fillStyle='hsla('+h+','+s+'%,'+l+'%,'+a+')';
+      ctx.fill();
+    }
+    if(isListening){
+      const gr=80+audioLevel*60;
+      const grd=ctx.createRadialGradient(CX,CY,0,CX,CY,gr);
+      grd.addColorStop(0,'rgba(34,197,94,'+(0.10+audioLevel*0.14)+')');
+      grd.addColorStop(0.5,'rgba(20,184,166,'+(0.05+audioLevel*0.07)+')');
+      grd.addColorStop(1,'rgba(0,0,0,0)');
+      ctx.beginPath(); ctx.arc(CX,CY,gr,0,6.2832);
+      ctx.fillStyle=grd; ctx.fill();
+    }
+  }
+
+  function loop(){ update(); draw(); requestAnimationFrame(loop); }
+
+  function onMsg(e){
+    try{
+      const d=JSON.parse(e.data);
+      if(d.type==='listening') isListening=d.value;
+      if(d.type==='audioLevel') audioLevel=d.value;
+    }catch(err){}
+  }
+  document.addEventListener('message',onMsg);
+  window.addEventListener('message',onMsg);
+
+  resize(); initParticles(); loop();
+  window.addEventListener('resize',function(){ ctx.resetTransform(); resize(); });
+})();
+</script>
+</body></html>
+`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Sub-components
@@ -32,85 +190,118 @@ function TypingDots() {
   useEffect(() => {
     const anims = dots.map((d, i) =>
       Animated.loop(Animated.sequence([
-        Animated.delay(i * 160),
-        Animated.timing(d, { toValue: 1, duration: 280, useNativeDriver: true }),
-        Animated.timing(d, { toValue: 0, duration: 280, useNativeDriver: true }),
-        Animated.delay(500),
+        Animated.delay(i * 150),
+        Animated.timing(d, { toValue: 1, duration: 350, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(d, { toValue: 0, duration: 350, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
       ]))
     );
     Animated.parallel(anims).start();
   }, []);
   return (
-    <View style={C.typingWrap}>
+    <View style={S.dotsRow}>
       {dots.map((d, i) => (
-        <Animated.View key={i} style={[C.dot, {
-          transform: [{ translateY: d.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) }],
-          opacity: d.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }),
+        <Animated.View key={i} style={[S.dot, {
+          opacity: d.interpolate({ inputRange: [0, 1], outputRange: [0.35, 1] }),
+          transform: [{ scale: d.interpolate({ inputRange: [0, 1], outputRange: [1, 1.4] }) }],
         }]} />
       ))}
     </View>
   );
 }
 
-function DiagnosisCard({ data, onBuyMedicine, t }) {
-  const sevColor = { low: '#2ECC71', moderate: '#F39C12', high: '#E74C3C', critical: '#C0392B' }[data.severity] || '#888';
+function DiagnosisCard({ data, onBuyMedicine }) {
+  const sevColor = { low: PRIMARY, moderate: '#F59E0B', high: '#EF4444', critical: '#BE123C' }[data.severity] || '#888';
+  const treatmentSteps = Array.isArray(data.treatment)
+    ? data.treatment
+    : data.treatment && typeof data.treatment === 'object'
+      ? Object.entries(data.treatment).filter(([, v]) => v).map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${v}`)
+      : [];
+  const preventionNote = data.prevention || data.expectedRecovery || data.additionalNotes || '';
+
   return (
-    <View style={C.diagCard}>
-      <View style={C.diagHeader}>
-        <View style={[C.diagSevDot, { backgroundColor: sevColor }]} />
-        <Text style={C.diagName}>{data.disease || data.name}</Text>
-        <View style={[C.diagConf, { backgroundColor: `${sevColor}18` }]}>
-          <Text style={[C.diagConfText, { color: sevColor }]}>{data.confidence}% match</Text>
+    <View style={S.diagCard}>
+      <View style={S.diagHeader}>
+        <View style={[S.diagSevDot, { backgroundColor: sevColor }]} />
+        <Text style={S.diagName}>{data.disease || data.name}</Text>
+        <View style={[S.diagConf, { backgroundColor: `${sevColor}20` }]}>
+          <Text style={[S.diagConfText, { color: sevColor }]}>{data.confidence}% match</Text>
         </View>
       </View>
-      <View style={C.diagMeta}>
-        <Ionicons name="leaf-outline" size={12} color="#888" />
-        <Text style={C.diagMetaText}>{data.crop} · {data.severity}</Text>
+      <View style={S.diagMeta}>
+        <Ionicons name="leaf-outline" size={12} color={MUTED} />
+        <Text style={S.diagMetaText}>{data.crop ? `${data.crop} · ` : ''}{data.severity}</Text>
       </View>
-      <View style={C.diagDivider} />
-      <Text style={C.diagSectionLabel}>Treatment Plan</Text>
-      {(data.treatment || []).map((step, i) => (
-        <View key={i} style={C.diagStep}>
-          <View style={C.diagStepNum}><Text style={C.diagStepNumText}>{i + 1}</Text></View>
-          <Text style={C.diagStepText}>{typeof step === 'string' ? step : step.action}</Text>
+      <View style={S.diagDivider} />
+      <Text style={S.diagSectionLabel}>Treatment Plan</Text>
+      {treatmentSteps.map((step, i) => (
+        <View key={i} style={S.diagStep}>
+          <View style={S.diagStepNum}><Text style={S.diagStepNumText}>{i + 1}</Text></View>
+          <Text style={S.diagStepText}>{typeof step === 'string' ? step : step.action}</Text>
         </View>
       ))}
-      {data.prevention && (
-        <View style={C.diagTip}>
-          <Ionicons name="shield-checkmark-outline" size={12} color="#2ECC71" />
-          <Text style={C.diagTipText}>{data.prevention}</Text>
+      {!!preventionNote && (
+        <View style={S.diagTip}>
+          <Ionicons name="shield-checkmark-outline" size={12} color={PRIMARY} />
+          <Text style={S.diagTipText}>{preventionNote}</Text>
         </View>
       )}
-      <TouchableOpacity style={C.buyBtn} onPress={onBuyMedicine} activeOpacity={0.8}>
-        <Ionicons name="cart-outline" size={14} color="#FFF" />
-        <Text style={C.buyBtnText}>Buy Products</Text>
+      <TouchableOpacity style={S.buyBtn} onPress={onBuyMedicine} activeOpacity={0.8}>
+        <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={S.buyBtnGrad}>
+          <Ionicons name="cart-outline" size={14} color="#FFF" />
+          <Text style={S.buyBtnText}>Buy Products</Text>
+        </LinearGradient>
       </TouchableOpacity>
     </View>
   );
 }
 
 function MarketCard({ data }) {
+  const prices   = data.prices || [];
+  const insight  = data.insight || data.sellingAdvice || '';
+  const metaRows = [
+    data.msp         && { label: 'MSP',         value: data.msp },
+    data.marketRange && { label: 'Market range', value: data.marketRange },
+    data.trend       && { label: 'Trend',        value: data.trend },
+    data.bestMarket  && { label: 'Best market',  value: data.bestMarket },
+  ].filter(Boolean);
+
   return (
-    <View style={C.mktCard}>
-      <Text style={C.mktCrop}>{data.crop} Prices Today</Text>
-      {(data.prices || []).map((p, i) => (
-        <View key={i} style={C.mktRow}>
-          <Text style={C.mktMandi}>{p.mandi}</Text>
-          <Text style={C.mktPrice}>₹{(p.price || 0).toLocaleString()}</Text>
+    <View style={S.mktCard}>
+      <Text style={S.mktCrop}>{data.crop} Prices Today</Text>
+      {prices.map((p, i) => (
+        <View key={i} style={S.mktRow}>
+          <Text style={S.mktMandi}>{p.mandi}</Text>
+          <Text style={S.mktPrice}>₹{(p.price || 0).toLocaleString()}</Text>
         </View>
       ))}
-      {data.insight && (
-        <View style={C.mktTip}>
-          <Ionicons name="bulb-outline" size={12} color="#F39C12" />
-          <Text style={C.mktTipText}>{data.insight}</Text>
+      {metaRows.map((row, i) => (
+        <View key={i} style={S.mktRow}>
+          <Text style={S.mktMandi}>{row.label}</Text>
+          <Text style={S.mktPrice}>{row.value}</Text>
+        </View>
+      ))}
+      {!!insight && (
+        <View style={S.mktTip}>
+          <Ionicons name="bulb-outline" size={12} color="#F59E0B" />
+          <Text style={S.mktTipText}>{insight}</Text>
         </View>
       )}
     </View>
   );
 }
 
-function MessageBubble({ msg, onBuyMedicine, t }) {
+function MessageBubble({ msg, onBuyMedicine }) {
   const isUser = msg.role === 'user';
+  const fadeAnim  = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(16)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, { toValue: 1, duration: 260, useNativeDriver: true }),
+      Animated.spring(slideAnim, { toValue: 0, tension: 90, friction: 12, useNativeDriver: true }),
+    ]).start();
+  }, []);
+
   const formatText = (text) => {
     const parts = (text || '').split(/(\*\*[^*]+\*\*)/g);
     return parts.map((p, i) =>
@@ -119,159 +310,206 @@ function MessageBubble({ msg, onBuyMedicine, t }) {
         : <Text key={i}>{p}</Text>
     );
   };
+
   if (isUser) {
     return (
-      <View style={C.userBubbleWrap}>
-        <View style={C.userBubble}>
+      <Animated.View style={[S.userBubbleWrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+        <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={S.userBubble}>
           {msg.isVoice && (
-            <View style={C.voiceTag}>
+            <View style={S.voiceTag}>
               <Ionicons name="mic" size={10} color="rgba(255,255,255,0.7)" />
-              <Text style={C.voiceTagText}>voice</Text>
+              <Text style={S.voiceTagText}>voice</Text>
             </View>
           )}
-          <Text style={C.userBubbleText}>{msg.transcribing ? '...' : msg.text}</Text>
-        </View>
-      </View>
+          <Text style={S.userBubbleText}>{msg.transcribing ? '…' : msg.text}</Text>
+        </LinearGradient>
+      </Animated.View>
     );
   }
+
   return (
-    <View style={C.aiBubbleWrap}>
-      <View style={C.aiAvatar}>
-        <Ionicons name="hardware-chip" size={14} color={GREEN} />
+    <Animated.View style={[S.aiBubbleWrap, { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }]}>
+      <View style={S.aiAvatar}>
+        <Ionicons name="leaf" size={14} color={PRIMARY} />
       </View>
       <View style={{ flex: 1, gap: 8 }}>
         {msg.text && (
-          <View style={C.aiBubble}>
-            <Text style={C.aiBubbleText}>{formatText(msg.text)}</Text>
+          <View style={S.aiBubble}>
+            <Text style={S.aiBubbleText}>{formatText(msg.text)}</Text>
           </View>
         )}
-        {msg.diagnosisData && <DiagnosisCard data={msg.diagnosisData} onBuyMedicine={onBuyMedicine} t={t} />}
-        {msg.marketData && <MarketCard data={msg.marketData} />}
-      </View>
-    </View>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ── Voice Orb (Siri-style plasma sphere)
-// ─────────────────────────────────────────────────────────────────────────────
-const SPHERE_D = 160;
-const BLOBS = [
-  { w: 98,  h: 158, c: '#1DB954', dur: 3200, ccw: false, tx: -10, ty:   8, op: 0.62 },
-  { w: 76,  h: 142, c: '#00E5AA', dur: 2500, ccw: true,  tx:  15, ty: -11, op: 0.55 },
-  { w: 124, h:  82, c: '#0D9E6E', dur: 4400, ccw: false, tx:   0, ty:  14, op: 0.70 },
-  { w: 52,  h: 126, c: '#7CFFA0', dur: 1900, ccw: true,  tx: -19, ty: -17, op: 0.36 },
-  { w: 90,  h: 102, c: '#003D20', dur: 5800, ccw: false, tx:  13, ty:  -7, op: 0.84 },
-];
-
-function VoiceOrb({ active, processing, audioLevel }) {
-  const rotAnims = useRef(BLOBS.map(() => new Animated.Value(0))).current;
-  const ampAnim  = useRef(new Animated.Value(0.82)).current;
-  const coreAnim = useRef(new Animated.Value(0.8)).current;
-  const glowAnim = useRef(new Animated.Value(1)).current;
-
-  useEffect(() => {
-    if (!active) return;
-    const rotLoops = rotAnims.map((anim, i) =>
-      Animated.loop(Animated.timing(anim, { toValue: 1, duration: BLOBS[i].dur, useNativeDriver: true, easing: Easing.linear }))
-    );
-    const coreLoop = Animated.loop(Animated.sequence([
-      Animated.timing(coreAnim, { toValue: 1.25, duration: 900, useNativeDriver: true }),
-      Animated.timing(coreAnim, { toValue: 0.70, duration: 900, useNativeDriver: true }),
-    ]));
-    const glowLoop = Animated.loop(Animated.sequence([
-      Animated.timing(glowAnim, { toValue: 1.08, duration: 1300, useNativeDriver: true }),
-      Animated.timing(glowAnim, { toValue: 1.00, duration: 1300, useNativeDriver: true }),
-    ]));
-    rotLoops.forEach(l => l.start());
-    coreLoop.start();
-    glowLoop.start();
-    return () => { rotLoops.forEach(l => l.stop()); coreLoop.stop(); glowLoop.stop(); };
-  }, [active]);
-
-  useEffect(() => {
-    Animated.spring(ampAnim, {
-      toValue: processing ? 0.95 : Math.max(0.80, Math.min(1.35, 0.80 + audioLevel * 0.58)),
-      useNativeDriver: true, speed: 22, bounciness: 4,
-    }).start();
-  }, [audioLevel, processing]);
-
-  return (
-    <Animated.View style={[O.outerHalo, { transform: [{ scale: glowAnim }] }]}>
-      <View style={O.sphere}>
-        <View style={O.sphereBase} />
-        {BLOBS.map((b, i) => {
-          const rot = rotAnims[i].interpolate({ inputRange: [0, 1], outputRange: b.ccw ? ['0deg', '-360deg'] : ['0deg', '360deg'] });
-          return (
-            <Animated.View key={i} style={{
-              position: 'absolute', width: b.w, height: b.h, borderRadius: 200,
-              backgroundColor: b.c, opacity: active ? b.op : b.op * 0.3,
-              transform: [{ translateX: b.tx }, { translateY: b.ty }, { rotate: rot }, { scale: ampAnim }],
-            }} />
-          );
-        })}
-        <Animated.View style={[O.coreGlow, { transform: [{ scale: Animated.multiply(coreAnim, ampAnim) }] }]} />
-        <View style={O.shine} />
-        {processing && (
-          <View style={O.processingOverlay}>
-            <ActivityIndicator color="#FFF" size="small" />
-          </View>
-        )}
+        {msg.diagnosisData && <DiagnosisCard data={msg.diagnosisData} onBuyMedicine={onBuyMedicine} />}
+        {msg.marketData    && <MarketCard data={msg.marketData} />}
       </View>
     </Animated.View>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ── History session card
-// ─────────────────────────────────────────────────────────────────────────────
+// ── WebView particle sphere voice visualiser ───────────────────────────────
+function VoiceParticleView({ isRecording, isProcessing, audioLevel, recordDuration,
+  voiceResult, onStart, onSend, onCancel, onViewChat }) {
+  const webViewRef = useRef(null);
+  const fadeAnim   = useRef(new Animated.Value(0)).current;
+  const transFade  = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, { toValue: 1, duration: 350, useNativeDriver: true }).start();
+  }, []);
+
+  useEffect(() => {
+    webViewRef.current?.postMessage(JSON.stringify({ type: 'listening', value: isRecording }));
+  }, [isRecording]);
+
+  useEffect(() => {
+    webViewRef.current?.postMessage(JSON.stringify({ type: 'audioLevel', value: audioLevel }));
+  }, [audioLevel]);
+
+  useEffect(() => {
+    if (voiceResult?.transcription) {
+      Animated.timing(transFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    } else {
+      transFade.setValue(0);
+    }
+  }, [voiceResult]);
+
+  const mins = Math.floor(recordDuration / 60).toString().padStart(2, '0');
+  const secs = (recordDuration % 60).toString().padStart(2, '0');
+  const statusText = isProcessing ? 'Analysing…' : isRecording ? `Listening  ${mins}:${secs}` : 'Tap mic to speak';
+
+  return (
+    <Animated.View style={[VP.root, { opacity: fadeAnim }]}>
+      {/* Sphere canvas */}
+      <View style={VP.canvasWrap}>
+        <WebView
+          ref={webViewRef}
+          source={{ html: PARTICLE_HTML }}
+          style={VP.webView}
+          scrollEnabled={false}
+          bounces={false}
+          overScrollMode="never"
+          javaScriptEnabled
+          originWhitelist={['*']}
+          backgroundColor={BG}
+          allowsInlineMediaPlayback
+        />
+      </View>
+
+      {/* Status pill */}
+      <View style={[VP.statusPill, isRecording && VP.statusPillActive]}>
+        <View style={[VP.statusDot, { backgroundColor: isProcessing ? '#F59E0B' : isRecording ? PRIMARY : MUTED }]} />
+        <Text style={VP.statusLabel}>{statusText}</Text>
+      </View>
+
+      {/* Transcript / last result */}
+      {voiceResult && !isRecording && !isProcessing && (
+        <Animated.View style={[VP.resultCard, { opacity: transFade }]}>
+          {voiceResult.error ? (
+            <Text style={VP.errorText}>⚠ {voiceResult.error}</Text>
+          ) : (
+            <>
+              <View style={VP.resultRow}>
+                <Ionicons name="mic-outline" size={13} color={MUTED} />
+                <Text style={VP.resultTrans} numberOfLines={2}>{voiceResult.transcription}</Text>
+              </View>
+              <View style={[VP.resultRow, { marginTop: 8 }]}>
+                <Ionicons name="leaf-outline" size={13} color={PRIMARY} />
+                <Text style={VP.resultReply} numberOfLines={3}>{voiceResult.reply}</Text>
+              </View>
+              <TouchableOpacity style={VP.viewChatBtn} onPress={onViewChat} activeOpacity={0.8}>
+                <Text style={VP.viewChatText}>View full reply in Chat →</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </Animated.View>
+      )}
+
+      {/* Controls */}
+      <View style={VP.controls}>
+        {isProcessing ? (
+          <ActivityIndicator color={PRIMARY} size="large" />
+        ) : isRecording ? (
+          <View style={VP.activeRow}>
+            <TouchableOpacity style={VP.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
+              <Ionicons name="close" size={22} color={DANGER} />
+            </TouchableOpacity>
+            <TouchableOpacity style={VP.sendRecBtn} onPress={onSend} activeOpacity={0.8}>
+              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VP.sendRecGrad}>
+                <Ionicons name="arrow-up" size={22} color="#FFF" />
+                <Text style={VP.sendRecText}>Send</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity style={VP.micBtn} onPress={onStart} activeOpacity={0.8}>
+            <LinearGradient colors={[PRIMARY, ACCENT]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VP.micGrad}>
+              <Ionicons name="mic" size={32} color="#FFF" />
+            </LinearGradient>
+          </TouchableOpacity>
+        )}
+        <Text style={VP.hint}>
+          {isRecording ? 'Tap send when done, or cancel'
+            : isProcessing ? 'Processing your voice…'
+            : 'Speak in Hindi, Marathi, English or any Indian language'}
+        </Text>
+      </View>
+    </Animated.View>
+  );
+}
+
+// ── Session history card ───────────────────────────────────────────────────
 function SessionCard({ session, onPress }) {
   const isScan    = session.isScanSession;
   const report    = session.scanReports?.[0];
-  const riskColor = { LOW: '#2ECC71', MODERATE: '#F39C12', HIGH: '#E74C3C', CRITICAL: '#C0392B' }[report?.riskLevel] || '#888';
+  const riskColor = { LOW: PRIMARY, MODERATE: '#F59E0B', HIGH: '#EF4444', CRITICAL: '#BE123C' }[report?.riskLevel] || MUTED;
   const date      = new Date(session.updatedAt || session.createdAt);
   const dateStr   = date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   const timeStr   = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
   return (
-    <TouchableOpacity style={H2.card} onPress={onPress} activeOpacity={0.75}>
-      <View style={[H2.iconBox, { backgroundColor: isScan ? 'rgba(46,204,113,0.12)' : 'rgba(52,152,219,0.12)' }]}>
-        <Ionicons name={isScan ? 'scan-outline' : 'chatbubble-ellipses-outline'} size={20} color={isScan ? GREEN : '#3498DB'} />
+    <TouchableOpacity style={S.sessionCard} onPress={onPress} activeOpacity={0.75}>
+      <View style={[S.sessionIcon, { backgroundColor: isScan ? 'rgba(34,197,94,0.12)' : 'rgba(20,184,166,0.12)' }]}>
+        <Ionicons name={isScan ? 'scan-outline' : 'chatbubble-ellipses-outline'} size={20} color={isScan ? PRIMARY : ACCENT} />
       </View>
       <View style={{ flex: 1 }}>
-        <Text style={H2.title} numberOfLines={1}>{session.title || 'AI Chat'}</Text>
+        <Text style={S.sessionTitle} numberOfLines={1}>{session.title || 'AI Chat'}</Text>
         {report && (
-          <View style={H2.pill}>
-            <View style={[H2.dot, { backgroundColor: riskColor }]} />
-            <Text style={[H2.pillText, { color: riskColor }]}>{report.riskLevel} · {Math.round((report.confidenceScore || 0) * 100)}% conf</Text>
+          <View style={S.sessionPill}>
+            <View style={[S.sessionDot, { backgroundColor: riskColor }]} />
+            <Text style={[S.sessionPillText, { color: riskColor }]}>
+              {report.riskLevel} · {Math.round((report.confidenceScore || 0) * 100)}% conf
+            </Text>
           </View>
         )}
-        <Text style={H2.meta}>{dateStr} · {timeStr} · {session._count?.messages || session.messages?.length || 0} msgs</Text>
+        <Text style={S.sessionMeta}>
+          {dateStr} · {timeStr} · {session._count?.messages || session.messages?.length || 0} msgs
+        </Text>
       </View>
-      <Ionicons name="chevron-forward" size={16} color="#CBD5E1" />
+      <Ionicons name="chevron-forward" size={16} color={MUTED} />
     </TouchableOpacity>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ── Tab bar
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Tab bar ────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'chat',    label: 'AI Chat',    icon: 'chatbubble-ellipses' },
-  { id: 'voice',   label: 'Voice',      icon: 'mic' },
-  { id: 'history', label: 'History',    icon: 'time' },
+  { id: 'chat',    label: 'AI Chat', icon: 'chatbubble-ellipses' },
+  { id: 'voice',   label: 'Voice',   icon: 'mic' },
+  { id: 'history', label: 'History', icon: 'time' },
 ];
 
 function TabBar({ active, onChange }) {
   return (
-    <View style={TB.bar}>
+    <View style={S.tabBar}>
       {TABS.map(tab => {
         const isActive = active === tab.id;
         return (
-          <TouchableOpacity key={tab.id} style={TB.tab} onPress={() => onChange(tab.id)} activeOpacity={0.75}>
-            <Ionicons name={isActive ? tab.icon : `${tab.icon}-outline`} size={18} color={isActive ? GREEN : '#9CA3AF'} />
-            <Text style={[TB.label, isActive && TB.labelActive]}>{tab.label}</Text>
-            {isActive && <View style={TB.indicator} />}
+          <TouchableOpacity key={tab.id} style={S.tab} onPress={() => onChange(tab.id)} activeOpacity={0.75}>
+            {isActive && <View style={S.tabIndicator} />}
+            <Ionicons
+              name={isActive ? tab.icon : `${tab.icon}-outline`}
+              size={18}
+              color={isActive ? PRIMARY : MUTED}
+            />
+            <Text style={[S.tabLabel, isActive && S.tabLabelActive]}>{tab.label}</Text>
           </TouchableOpacity>
         );
       })}
@@ -280,38 +518,39 @@ function TabBar({ active, onChange }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ── Main screen
+// ── Main Screen
 // ─────────────────────────────────────────────────────────────────────────────
 export default function AIChatScreen({ navigation, route }) {
-  const insets  = useSafeAreaInsets();
+  const insets = useSafeAreaInsets();
   const { getAIContext } = useFarm();
-  const { t }   = useLanguage();
+  const { t } = useLanguage();
 
   const initialMsg             = route?.params?.initialMessage;
   const existingConversationId = route?.params?.conversationId;
-  const startTab               = route?.params?.voiceMode ? 'voice' : (route?.params?.showHistory || route?.params?.showScanHistory) ? 'history' : 'chat';
+  const startTab               = route?.params?.voiceMode ? 'voice'
+    : (route?.params?.showHistory || route?.params?.showScanHistory) ? 'history' : 'chat';
 
-  // ── Tab state ───────────────────────────────────────────────────────────────
+  // ── State ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(startTab);
 
-  // ── Chat state ──────────────────────────────────────────────────────────────
-  const [messages, setMessages]       = useState([{ id: '0', role: 'ai', text: 'Hello! I am FarmMind AI. Ask me anything about your crops, diseases, mandi prices, or farming schemes.' }]);
-  const [input, setInput]             = useState('');
-  const [typing, setTyping]           = useState(false);
-  const [conversationId, setConvId]   = useState(existingConversationId || null);
+  // Chat
+  const [messages, setMessages]     = useState([{ id: '0', role: 'ai', text: 'Hello! I am FarmMind AI. Ask me anything about your crops, diseases, mandi prices, or farming schemes.' }]);
+  const [input, setInput]           = useState('');
+  const [typing, setTyping]         = useState(false);
+  const [conversationId, setConvId] = useState(existingConversationId || null);
   const flatRef    = useRef(null);
   const lastSentAt = useRef(0);
 
-  // ── Voice state ─────────────────────────────────────────────────────────────
+  // Voice
   const [isRecording, setIsRecording]   = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordDuration, setRecDur]     = useState(0);
   const [audioLevel, setAudioLevel]     = useState(0);
-  const [voiceResult, setVoiceResult]   = useState(null); // { transcription, reply, type, card }
+  const [voiceResult, setVoiceResult]   = useState(null);
   const recordRef   = useRef(null);
   const recTimerRef = useRef(null);
 
-  // ── History state ───────────────────────────────────────────────────────────
+  // History
   const [sessions, setSessions]       = useState([]);
   const [historyLoading, setHLoading] = useState(false);
   const [historyLoaded, setHLoaded]   = useState(false);
@@ -325,7 +564,6 @@ export default function AIChatScreen({ navigation, route }) {
   const sendMessage = useCallback(async (text) => {
     const msg = text || input.trim();
     if (!msg || typing) return;
-
     const now = Date.now();
     if (now - lastSentAt.current < 6000) {
       const wait = Math.ceil((6000 - (now - lastSentAt.current)) / 1000);
@@ -336,7 +574,6 @@ export default function AIChatScreen({ navigation, route }) {
     setInput('');
     addMessage({ role: 'user', text: msg });
     setTyping(true);
-
     try {
       const result = await sendChatMessage(msg, conversationId, getAIContext());
       if (result.conversationId && !conversationId) setConvId(result.conversationId);
@@ -348,7 +585,7 @@ export default function AIChatScreen({ navigation, route }) {
       const errMsg = err.response?.status === 429
         ? 'Too many requests — please wait 30 seconds.'
         : 'Could not reach FarmMind AI. Check your connection.';
-      addMessage({ role: 'ai', text: `⚠️ ${errMsg}` });
+      addMessage({ role: 'ai', text: `⚠ ${errMsg}` });
     } finally {
       setTyping(false);
     }
@@ -400,12 +637,9 @@ export default function AIChatScreen({ navigation, route }) {
       const uri = recordRef.current.getURI();
       recordRef.current = null;
       if (!uri) { setIsProcessing(false); return; }
-
       const result = await sendVoiceMessage(uri, conversationId, getAIContext());
       if (result.conversationId && !conversationId) setConvId(result.conversationId);
       setVoiceResult(result);
-
-      // Also add to chat tab so the conversation is preserved
       addMessage({ role: 'user', text: result.transcription || '(voice)', isVoice: true });
       const aiMsg = { role: 'ai', text: result.reply };
       if (result.type === 'diagnosis' && result.card) aiMsg.diagnosisData = result.card;
@@ -413,7 +647,11 @@ export default function AIChatScreen({ navigation, route }) {
       addMessage(aiMsg);
     } catch (err) {
       recordRef.current = null;
-      setVoiceResult({ error: err.response?.status === 429 ? 'Rate limit — wait 30s and try again.' : 'Processing failed. Try again.' });
+      setVoiceResult({
+        error: err.response?.status === 429
+          ? 'Rate limit — wait 30s and try again.'
+          : 'Processing failed. Try again.',
+      });
     } finally {
       setIsProcessing(false);
       setRecDur(0);
@@ -424,7 +662,10 @@ export default function AIChatScreen({ navigation, route }) {
   const cancelRecording = useCallback(async () => {
     clearInterval(recTimerRef.current);
     if (recordRef.current) {
-      try { await recordRef.current.stopAndUnloadAsync(); await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch { /* ignore */ }
+      try {
+        await recordRef.current.stopAndUnloadAsync();
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      } catch { /* ignore */ }
       recordRef.current = null;
     }
     setIsRecording(false);
@@ -433,7 +674,7 @@ export default function AIChatScreen({ navigation, route }) {
     setAudioLevel(0);
   }, []);
 
-  // ── History: load sessions ──────────────────────────────────────────────────
+  // ── History ─────────────────────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
     if (historyLoading) return;
     setHLoading(true);
@@ -453,7 +694,6 @@ export default function AIChatScreen({ navigation, route }) {
     if (activeTab === 'history' && !historyLoaded) loadHistory();
   }, [activeTab]);
 
-  // ── Load existing conversation ──────────────────────────────────────────────
   useEffect(() => {
     if (existingConversationId) {
       getConversationMessages(existingConversationId).then(convo => {
@@ -476,37 +716,46 @@ export default function AIChatScreen({ navigation, route }) {
     setTimeout(() => flatRef.current?.scrollToEnd({ animated: true }), 80);
   }, [messages, typing]);
 
-  // ── Format voice timer ──────────────────────────────────────────────────────
-  const mins = Math.floor(recordDuration / 60).toString().padStart(2, '0');
-  const secs = (recordDuration % 60).toString().padStart(2, '0');
-
   // ─────────────────────────────────────────────────────────────────────────
   // ── Render
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <View style={{ flex: 1, backgroundColor: '#F5F5F5' }}>
-      <StatusBar barStyle="dark-content" />
+    <View style={{ flex: 1, backgroundColor: BG }}>
+      <StatusBar barStyle="light-content" backgroundColor={BG} />
+
+      {/* Background gradient orbs */}
+      <LinearGradient
+        colors={['rgba(34,197,94,0.09)', 'transparent']}
+        style={S.orb1}
+        pointerEvents="none"
+      />
+      <LinearGradient
+        colors={['rgba(20,184,166,0.07)', 'transparent']}
+        style={S.orb2}
+        pointerEvents="none"
+      />
 
       {/* ── Header ── */}
-      <View style={[C.header, { paddingTop: insets.top + 10 }]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={C.backBtn}>
-          <Ionicons name="chevron-back" size={22} color={GREEN} />
+      <View style={[S.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={() => navigation.goBack()} style={S.backBtn} activeOpacity={0.7}>
+          <Ionicons name="chevron-back" size={22} color={PRIMARY} />
         </TouchableOpacity>
-        <View style={C.headerCenter}>
-          <View style={C.headerAvatar}>
-            <Ionicons name="hardware-chip" size={16} color={GREEN} />
-          </View>
+        <View style={S.headerCenter}>
+          <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={S.headerAvatar}>
+            <Ionicons name="leaf" size={15} color="#FFF" />
+          </LinearGradient>
           <View>
-            <Text style={C.headerTitle}>FarmMind AI</Text>
-            <View style={C.onlineRow}>
-              <View style={C.onlineDot} />
-              <Text style={C.onlineText}>Online</Text>
+            <Text style={S.headerTitle}>FarmMind AI</Text>
+            <View style={S.onlineRow}>
+              <View style={S.onlineDot} />
+              <Text style={S.onlineText}>Online</Text>
             </View>
           </View>
         </View>
+        <View style={{ width: 36 }} />
       </View>
 
-      {/* ── Tab bar ── */}
+      {/* ── Tab Bar ── */}
       <TabBar active={activeTab} onChange={setActiveTab} />
 
       {/* ══════════════════════════════════════════════════════════════════════
@@ -518,184 +767,122 @@ export default function AIChatScreen({ navigation, route }) {
             ref={flatRef}
             data={messages}
             keyExtractor={m => m.id}
-            contentContainerStyle={C.msgList}
+            contentContainerStyle={S.msgList}
             showsVerticalScrollIndicator={false}
             renderItem={({ item }) => (
-              <MessageBubble msg={item} onBuyMedicine={() => navigation.navigate('AgriStore')} t={t} />
+              <MessageBubble msg={item} onBuyMedicine={() => navigation.navigate('AgriStore')} />
             )}
             ListFooterComponent={typing ? (
-              <View style={C.aiBubbleWrap}>
-                <View style={C.aiAvatar}><Ionicons name="hardware-chip" size={14} color={GREEN} /></View>
-                <View style={C.aiBubble}><TypingDots /></View>
+              <View style={S.aiBubbleWrap}>
+                <View style={S.aiAvatar}><Ionicons name="leaf" size={14} color={PRIMARY} /></View>
+                <View style={S.aiBubble}><TypingDots /></View>
               </View>
             ) : null}
           />
 
-          {/* Quick suggestion chips */}
+          {/* Suggestion chips */}
           {messages.length <= 1 && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={C.chipsList}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.chipsList}>
               {['My tomato leaves have brown spots', 'Best fertilizer for wheat', 'PM-KISAN scheme details', 'Mandi price today', 'Pest scouting tips'].map((s, i) => (
-                <TouchableOpacity key={i} style={C.chip} onPress={() => sendMessage(s)} activeOpacity={0.7}>
-                  <Text style={C.chipText}>{s}</Text>
+                <TouchableOpacity key={i} style={S.chip} onPress={() => sendMessage(s)} activeOpacity={0.7}>
+                  <Text style={S.chipText}>{s}</Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
           )}
 
-          {/* Input bar — text + voice only, NO camera */}
-          <View style={[C.inputBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
-            <TextInput
-              style={C.textInput}
-              placeholder="Ask about crops, diseases, prices…"
-              placeholderTextColor="#9CA3AF"
-              value={input}
-              onChangeText={setInput}
-              multiline
-              maxLength={500}
-              onSubmitEditing={() => sendMessage()}
-              returnKeyType="send"
-              blurOnSubmit
-            />
-            {input.trim() ? (
-              <TouchableOpacity style={C.sendBtn} onPress={() => sendMessage()} activeOpacity={0.8}>
-                <Ionicons name="arrow-up" size={18} color="#FFF" />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity style={C.voiceBtn} onPress={() => { setActiveTab('voice'); setTimeout(startRecording, 300); }} activeOpacity={0.8}>
-                <Ionicons name="mic" size={20} color={GREEN} />
-              </TouchableOpacity>
-            )}
+          {/* Input bar */}
+          <View style={[S.inputBar, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            {/* Fade gradient above input */}
+            <LinearGradient colors={['transparent', BG]} style={S.inputFade} pointerEvents="none" />
+            <View style={S.inputRow}>
+              <TextInput
+                style={S.textInput}
+                placeholder="Ask about crops, diseases, prices…"
+                placeholderTextColor={MUTED}
+                value={input}
+                onChangeText={setInput}
+                multiline
+                maxLength={1000}
+                returnKeyType="send"
+                blurOnSubmit
+                onSubmitEditing={() => sendMessage()}
+              />
+              {input.trim() ? (
+                <TouchableOpacity style={S.sendBtn} onPress={() => sendMessage()} activeOpacity={0.8}>
+                  <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={S.sendBtnGrad}>
+                    <Ionicons name="arrow-up" size={18} color="#FFF" />
+                  </LinearGradient>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={S.voiceBtn}
+                  onPress={() => { setActiveTab('voice'); setTimeout(startRecording, 300); }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="mic" size={20} color={PRIMARY} />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </KeyboardAvoidingView>
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════
-          TAB 2 — VOICE ASSISTANT
+          TAB 2 — VOICE (full-screen particle sphere)
       ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'voice' && (
-        <View style={VT.root}>
-          <LinearGradient colors={['#F0FAF4', '#E8F5EC', '#F0FAF4']} style={StyleSheet.absoluteFill} />
-
-          {/* Status */}
-          <View style={VT.statusArea}>
-            <View style={[VT.statusPill, { borderColor: isRecording ? '#2ECC71' : '#E5E7EB' }]}>
-              <View style={[VT.statusDot, { backgroundColor: isProcessing ? '#F39C12' : isRecording ? '#2ECC71' : '#CBD5E1' }]} />
-              <Text style={VT.statusLabel}>
-                {isProcessing ? 'Analyzing…' : isRecording ? 'Listening…' : 'Tap mic to speak'}
-              </Text>
-            </View>
-            {isRecording && <Text style={VT.timer}>{mins}:{secs}</Text>}
-          </View>
-
-          {/* Orb */}
-          <View style={VT.orbArea}>
-            <VoiceOrb active={isRecording || isProcessing} processing={isProcessing} audioLevel={audioLevel} />
-
-            {/* Audio level bars */}
-            {isRecording && (
-              <View style={VT.levelRow}>
-                {Array.from({ length: 18 }, (_, i) => (
-                  <View key={i} style={[VT.levelBar, {
-                    height:  3 + Math.sin((i / 17) * Math.PI) * 13,
-                    opacity: audioLevel > i / 18 ? 0.85 : 0.15,
-                  }]} />
-                ))}
-              </View>
-            )}
-          </View>
-
-          {/* Controls */}
-          <View style={VT.controls}>
-            {!isRecording && !isProcessing ? (
-              <TouchableOpacity style={VT.recordBtn} onPress={startRecording} activeOpacity={0.8}>
-                <Ionicons name="mic" size={32} color="#FFF" />
-              </TouchableOpacity>
-            ) : isRecording ? (
-              <View style={VT.activeControls}>
-                <TouchableOpacity style={VT.cancelBtn} onPress={cancelRecording} activeOpacity={0.8}>
-                  <Ionicons name="close" size={22} color="#E74C3C" />
-                </TouchableOpacity>
-                <TouchableOpacity style={VT.sendBtn} onPress={stopAndSend} activeOpacity={0.8}>
-                  <Ionicons name="arrow-up" size={22} color="#FFF" />
-                  <Text style={VT.sendBtnText}>Send</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <ActivityIndicator color={GREEN} size="large" />
-            )}
-            <Text style={VT.hint}>
-              {!isRecording && !isProcessing ? 'Speak in Hindi, Marathi, English or any Indian language' : isRecording ? 'Tap send when done, or cancel' : 'Processing your voice…'}
-            </Text>
-          </View>
-
-          {/* Last voice result */}
-          {voiceResult && !isRecording && !isProcessing && (
-            <View style={VT.resultCard}>
-              {voiceResult.error ? (
-                <Text style={VT.errorText}>⚠️ {voiceResult.error}</Text>
-              ) : (
-                <>
-                  <View style={VT.resultRow}>
-                    <Ionicons name="mic-outline" size={13} color="#6B7280" />
-                    <Text style={VT.resultTranscription} numberOfLines={2}>{voiceResult.transcription}</Text>
-                  </View>
-                  <View style={[VT.resultRow, { marginTop: 8 }]}>
-                    <Ionicons name="hardware-chip-outline" size={13} color={GREEN} />
-                    <Text style={VT.resultReply} numberOfLines={4}>{voiceResult.reply}</Text>
-                  </View>
-                  <TouchableOpacity style={VT.viewChatBtn} onPress={() => setActiveTab('chat')} activeOpacity={0.8}>
-                    <Text style={VT.viewChatText}>View full reply in Chat →</Text>
-                  </TouchableOpacity>
-                </>
-              )}
-            </View>
-          )}
-        </View>
+        <VoiceParticleView
+          isRecording={isRecording}
+          isProcessing={isProcessing}
+          audioLevel={audioLevel}
+          recordDuration={recordDuration}
+          voiceResult={voiceResult}
+          onStart={startRecording}
+          onSend={stopAndSend}
+          onCancel={cancelRecording}
+          onViewChat={() => setActiveTab('chat')}
+        />
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════
-          TAB 3 — SCAN / CHAT HISTORY
+          TAB 3 — HISTORY
       ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'history' && (
         <View style={{ flex: 1 }}>
           {historyLoading ? (
-            <View style={H2.loader}>
-              <ActivityIndicator color={GREEN} size="large" />
-              <Text style={H2.loaderText}>Loading history…</Text>
+            <View style={S.loaderWrap}>
+              <ActivityIndicator color={PRIMARY} size="large" />
+              <Text style={S.loaderText}>Loading history…</Text>
             </View>
           ) : sessions.length === 0 ? (
-            <View style={H2.empty}>
-              <Ionicons name="time-outline" size={48} color="#CBD5E1" />
-              <Text style={H2.emptyTitle}>No history yet</Text>
-              <Text style={H2.emptyMsg}>Your AI chats and crop scans will appear here.</Text>
-              <TouchableOpacity style={H2.startBtn} onPress={() => setActiveTab('chat')} activeOpacity={0.8}>
-                <Text style={H2.startBtnText}>Start a Chat</Text>
+            <View style={S.emptyWrap}>
+              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={S.emptyIcon}>
+                <Ionicons name="time" size={32} color="#FFF" />
+              </LinearGradient>
+              <Text style={S.emptyTitle}>No history yet</Text>
+              <Text style={S.emptyMsg}>Your AI chats and crop scans will appear here.</Text>
+              <TouchableOpacity style={S.emptyBtn} onPress={() => setActiveTab('chat')} activeOpacity={0.8}>
+                <Text style={S.emptyBtnText}>Start a Chat</Text>
               </TouchableOpacity>
             </View>
           ) : (
             <FlatList
               data={sessions}
               keyExtractor={s => s.id}
-              contentContainerStyle={H2.list}
+              contentContainerStyle={S.historyList}
               showsVerticalScrollIndicator={false}
               refreshing={historyLoading}
               onRefresh={loadHistory}
               ListHeaderComponent={
-                <Text style={H2.sectionLabel}>
+                <Text style={S.historyHeader}>
                   {sessions.length} conversation{sessions.length !== 1 ? 's' : ''}
                 </Text>
               }
               renderItem={({ item }) => (
                 <SessionCard
                   session={item}
-                  onPress={() => {
-                    if (item.isScanSession) {
-                      // Open scan session — for now open as regular chat with conversationId
-                      navigation.push('AIChat', { conversationId: item.id });
-                    } else {
-                      navigation.push('AIChat', { conversationId: item.id });
-                    }
-                  }}
+                  onPress={() => navigation.push('AIChat', { conversationId: item.id })}
                 />
               )}
             />
@@ -709,228 +896,205 @@ export default function AIChatScreen({ navigation, route }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ── Styles
 // ─────────────────────────────────────────────────────────────────────────────
+const S = StyleSheet.create({
+  // Background orbs
+  orb1: { position: 'absolute', top: -80, left: -60, width: 320, height: 320, borderRadius: 160 },
+  orb2: { position: 'absolute', bottom: 80, right: -80, width: 280, height: 280, borderRadius: 140 },
 
-const C = StyleSheet.create({
+  // Header
   header: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingBottom: 10,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingBottom: 12,
+    borderBottomWidth: 1, borderBottomColor: GBORDER,
+    backgroundColor: 'rgba(7,16,9,0.92)',
   },
-  backBtn:      { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  backBtn:      { width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
   headerCenter: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, marginLeft: 4 },
-  headerAvatar: {
-    width: 36, height: 36, borderRadius: 10,
-    backgroundColor: 'rgba(46,204,113,0.12)', borderWidth: 1, borderColor: 'rgba(46,204,113,0.25)',
-    justifyContent: 'center', alignItems: 'center',
+  headerAvatar: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  headerTitle:  { fontSize: 15, fontWeight: '800', color: TEXT },
+  onlineRow:    { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  onlineDot:    { width: 6, height: 6, borderRadius: 3, backgroundColor: PRIMARY },
+  onlineText:   { fontSize: 10, color: TEXT2, fontWeight: '600' },
+
+  // Tab bar
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(7,16,9,0.92)',
+    borderBottomWidth: 1,
+    borderBottomColor: GBORDER,
   },
-  headerTitle: { fontSize: 15, fontWeight: '800', color: '#1E293B' },
-  onlineRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
-  onlineDot:   { width: 6, height: 6, borderRadius: 3, backgroundColor: GREEN },
-  onlineText:  { fontSize: 10, color: GREEN, fontWeight: '500' },
+  tab: {
+    flex: 1, alignItems: 'center', paddingVertical: 10, gap: 3, position: 'relative',
+  },
+  tabIndicator: {
+    position: 'absolute', top: 0, left: '15%', right: '15%',
+    height: 2, backgroundColor: PRIMARY, borderRadius: 1,
+  },
+  tabLabel:       { fontSize: 11, color: MUTED, fontWeight: '600' },
+  tabLabelActive: { color: PRIMARY },
 
-  msgList: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 8, gap: 12 },
+  // Messages
+  msgList: { paddingHorizontal: 14, paddingTop: 16, paddingBottom: 8, gap: 10 },
 
-  userBubbleWrap: { alignItems: 'flex-end', marginBottom: 4 },
+  aiBubbleWrap: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 2 },
+  aiAvatar: {
+    width: 30, height: 30, borderRadius: 9, marginTop: 2,
+    backgroundColor: GLASS, borderWidth: 1, borderColor: GBORDER,
+    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+  },
+  aiBubble: {
+    backgroundColor: GLASS, borderRadius: 18, borderBottomLeftRadius: 4,
+    paddingHorizontal: 14, paddingVertical: 12, maxWidth: W * 0.78,
+    borderWidth: 1, borderColor: GBORDER,
+  },
+  aiBubbleText: { fontSize: 14, color: TEXT, lineHeight: 21 },
+
+  userBubbleWrap: { alignItems: 'flex-end', marginBottom: 2 },
   userBubble: {
-    backgroundColor: '#2D9162', borderRadius: 18, borderBottomRightRadius: 4,
+    borderRadius: 18, borderBottomRightRadius: 4,
     paddingHorizontal: 16, paddingVertical: 12, maxWidth: W * 0.78,
   },
   voiceTag:     { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 4 },
   voiceTagText: { fontSize: 9, color: 'rgba(255,255,255,0.65)', fontWeight: '600', letterSpacing: 0.5 },
   userBubbleText: { fontSize: 14, color: '#FFF', lineHeight: 20 },
 
-  aiBubbleWrap: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 4 },
-  aiAvatar: {
-    width: 30, height: 30, borderRadius: 9, marginTop: 2,
-    backgroundColor: 'rgba(46,204,113,0.12)', borderWidth: 1, borderColor: 'rgba(46,204,113,0.25)',
-    justifyContent: 'center', alignItems: 'center', flexShrink: 0,
-  },
-  aiBubble: {
-    backgroundColor: '#FFF', borderRadius: 18, borderBottomLeftRadius: 4,
-    paddingHorizontal: 16, paddingVertical: 12, maxWidth: W * 0.78,
-    borderWidth: 1, borderColor: '#E5E7EB',
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 4, elevation: 1,
-  },
-  aiBubbleText: { fontSize: 14, color: '#1E293B', lineHeight: 21 },
+  dotsRow: { flexDirection: 'row', gap: 5, alignItems: 'center', height: 20 },
+  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: PRIMARY },
 
-  typingWrap: { flexDirection: 'row', gap: 4, alignItems: 'center', height: 20, paddingVertical: 4 },
-  dot:        { width: 7, height: 7, borderRadius: 4, backgroundColor: GREEN },
-
+  // Diagnosis card
   diagCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 14, gap: 10,
-    borderWidth: 1, borderColor: '#E5E7EB', maxWidth: W * 0.78,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, elevation: 1,
+    backgroundColor: GLASS, borderRadius: 16, padding: 14, gap: 10,
+    borderWidth: 1, borderColor: GBORDER, maxWidth: W * 0.78,
   },
   diagHeader:       { flexDirection: 'row', alignItems: 'center', gap: 8 },
   diagSevDot:       { width: 8, height: 8, borderRadius: 4 },
-  diagName:         { fontSize: 15, fontWeight: '800', color: '#1E293B', flex: 1 },
+  diagName:         { fontSize: 15, fontWeight: '800', color: TEXT, flex: 1 },
   diagConf:         { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
   diagConfText:     { fontSize: 11, fontWeight: '700' },
   diagMeta:         { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  diagMetaText:     { fontSize: 11, color: '#9CA3AF' },
-  diagDivider:      { height: 1, backgroundColor: 'rgba(0,0,0,0.06)' },
-  diagSectionLabel: { fontSize: 10, fontWeight: '800', color: '#9CA3AF', letterSpacing: 1, textTransform: 'uppercase' },
+  diagMetaText:     { fontSize: 11, color: MUTED },
+  diagDivider:      { height: 1, backgroundColor: GBORDER },
+  diagSectionLabel: { fontSize: 10, fontWeight: '800', color: MUTED, letterSpacing: 1, textTransform: 'uppercase' },
   diagStep:         { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   diagStepNum: {
-    width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(46,204,113,0.15)',
+    width: 20, height: 20, borderRadius: 10, backgroundColor: 'rgba(34,197,94,0.15)',
     justifyContent: 'center', alignItems: 'center', flexShrink: 0, marginTop: 1,
   },
-  diagStepNumText: { fontSize: 10, color: GREEN, fontWeight: '800' },
-  diagStepText:    { fontSize: 12, color: '#6B7280', lineHeight: 18, flex: 1 },
-  diagTip:         { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(46,204,113,0.08)', borderRadius: 8, padding: 10 },
-  diagTipText:     { fontSize: 11, color: '#6B7280', lineHeight: 16, flex: 1 },
-  buyBtn:          { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: GREEN, borderRadius: 10, paddingVertical: 10, marginTop: 2 },
-  buyBtnText:      { fontSize: 13, fontWeight: '800', color: '#FFF' },
+  diagStepNumText: { fontSize: 10, color: PRIMARY, fontWeight: '800' },
+  diagStepText:    { fontSize: 12, color: TEXT2, lineHeight: 18, flex: 1 },
+  diagTip:  { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(34,197,94,0.08)', borderRadius: 8, padding: 10 },
+  diagTipText: { fontSize: 11, color: TEXT2, lineHeight: 16, flex: 1 },
+  buyBtn: { borderRadius: 10, overflow: 'hidden', marginTop: 2 },
+  buyBtnGrad: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10 },
+  buyBtnText: { fontSize: 13, fontWeight: '800', color: '#FFF' },
 
+  // Market card
   mktCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 14, gap: 8,
-    borderWidth: 1, borderColor: '#E5E7EB', maxWidth: W * 0.78,
-    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, elevation: 1,
+    backgroundColor: GLASS, borderRadius: 16, padding: 14, gap: 8,
+    borderWidth: 1, borderColor: GBORDER, maxWidth: W * 0.78,
   },
-  mktCrop:    { fontSize: 13, fontWeight: '800', color: '#F39C12' },
+  mktCrop:    { fontSize: 13, fontWeight: '800', color: '#F59E0B' },
   mktRow:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  mktMandi:   { fontSize: 12, color: '#6B7280', flex: 1 },
-  mktPrice:   { fontSize: 13, fontWeight: '700', color: '#1E293B' },
-  mktTip:     { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(243,156,18,0.08)', borderRadius: 8, padding: 10, marginTop: 2 },
-  mktTipText: { fontSize: 11, color: '#6B7280', lineHeight: 16, flex: 1 },
+  mktMandi:   { fontSize: 12, color: MUTED, flex: 1 },
+  mktPrice:   { fontSize: 13, fontWeight: '700', color: TEXT },
+  mktTip:     { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: 'rgba(245,158,11,0.08)', borderRadius: 8, padding: 10, marginTop: 2 },
+  mktTipText: { fontSize: 11, color: TEXT2, lineHeight: 16, flex: 1 },
 
-  chipsList:  { paddingHorizontal: 16, paddingVertical: 8, gap: 8 },
-  chip:       { backgroundColor: '#FFF', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, borderColor: '#E5E7EB' },
-  chipText:   { fontSize: 12, color: '#6B7280', fontWeight: '500' },
+  // Suggestions
+  chipsList: { paddingHorizontal: 14, paddingVertical: 8, gap: 8 },
+  chip: {
+    backgroundColor: GLASS, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8,
+    borderWidth: 1, borderColor: GBORDER,
+  },
+  chipText: { fontSize: 12, color: TEXT2, fontWeight: '500' },
 
-  inputBar: {
+  // Input bar
+  inputBar: { position: 'relative', backgroundColor: 'rgba(7,16,9,0.95)', paddingHorizontal: 14, paddingTop: 10 },
+  inputFade: { position: 'absolute', top: -28, left: 0, right: 0, height: 28 },
+  inputRow: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 10,
-    paddingHorizontal: 16, paddingTop: 12,
-    backgroundColor: '#FFF', borderTopWidth: 1, borderTopColor: '#E5E7EB',
+    backgroundColor: GLASS, borderRadius: 24,
+    borderWidth: 1, borderColor: GBORDER,
+    paddingHorizontal: 14, paddingVertical: 8,
   },
   textInput: {
-    flex: 1, backgroundColor: '#F3F4F6', borderRadius: 20,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 14, color: '#1E293B', maxHeight: 100, minHeight: 40,
-    borderWidth: 1, borderColor: '#E5E7EB',
+    flex: 1, fontSize: 14, color: TEXT, maxHeight: 100, minHeight: 36,
+    paddingVertical: 4,
   },
-  sendBtn:  { width: 40, height: 40, borderRadius: 20, backgroundColor: GREEN, justifyContent: 'center', alignItems: 'center' },
+  sendBtn:  { width: 36, height: 36, borderRadius: 18, overflow: 'hidden' },
+  sendBtnGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   voiceBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(46,204,113,0.12)', borderWidth: 1, borderColor: 'rgba(46,204,113,0.3)',
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: 'rgba(34,197,94,0.12)', borderWidth: 1, borderColor: GBORDER,
     justifyContent: 'center', alignItems: 'center',
   },
+
+  // Session / history
+  sessionCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    backgroundColor: GLASS, borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: GBORDER, marginBottom: 10,
+  },
+  sessionIcon: { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
+  sessionTitle: { fontSize: 14, fontWeight: '700', color: TEXT, marginBottom: 4 },
+  sessionPill: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 4 },
+  sessionDot: { width: 6, height: 6, borderRadius: 3 },
+  sessionPillText: { fontSize: 11, fontWeight: '600' },
+  sessionMeta: { fontSize: 11, color: MUTED },
+  historyList: { paddingHorizontal: 16, paddingTop: 12 },
+  historyHeader: { fontSize: 12, color: MUTED, fontWeight: '700', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 12 },
+
+  // Loader / empty
+  loaderWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 14 },
+  loaderText: { fontSize: 14, color: TEXT2 },
+  emptyWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, paddingHorizontal: 32 },
+  emptyIcon: { width: 72, height: 72, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  emptyTitle: { fontSize: 20, fontWeight: '800', color: TEXT },
+  emptyMsg: { fontSize: 14, color: TEXT2, textAlign: 'center', lineHeight: 22 },
+  emptyBtn: {
+    backgroundColor: GLASS, borderRadius: 20, paddingHorizontal: 28, paddingVertical: 12,
+    borderWidth: 1, borderColor: GBORDER, marginTop: 4,
+  },
+  emptyBtnText: { fontSize: 14, fontWeight: '700', color: PRIMARY },
 });
 
-// Tab bar
-const TB = StyleSheet.create({
-  bar: {
-    flexDirection: 'row', backgroundColor: '#FFF',
-    borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
-  },
-  tab: {
-    flex: 1, alignItems: 'center', paddingVertical: 10, gap: 3, position: 'relative',
-  },
-  label:       { fontSize: 11, color: '#9CA3AF', fontWeight: '600' },
-  labelActive: { color: GREEN },
-  indicator:   { position: 'absolute', bottom: 0, left: '15%', right: '15%', height: 2, backgroundColor: GREEN, borderRadius: 2 },
-});
+// ── Voice particle view styles ─────────────────────────────────────────────
+const VP = StyleSheet.create({
+  root: { flex: 1, alignItems: 'center', justifyContent: 'space-between', paddingBottom: 32 },
+  canvasWrap: { width: W, height: H * 0.48, overflow: 'hidden' },
+  webView: { flex: 1, backgroundColor: BG },
 
-// Voice tab
-const VT = StyleSheet.create({
-  root:        { flex: 1, alignItems: 'center', justifyContent: 'space-between', paddingBottom: 32 },
-  statusArea:  { alignItems: 'center', paddingTop: 28, gap: 8 },
   statusPill: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#FFF', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8,
-    borderWidth: 1.5,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, elevation: 1,
+    backgroundColor: GLASS, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8,
+    borderWidth: 1, borderColor: GBORDER,
   },
-  statusDot:   { width: 8, height: 8, borderRadius: 4 },
-  statusLabel: { fontSize: 14, fontWeight: '700', color: '#1E293B' },
-  timer:       { fontSize: 24, fontWeight: '800', color: '#1E293B', letterSpacing: 2 },
-
-  orbArea:  { alignItems: 'center', justifyContent: 'center', flex: 1, gap: 20 },
-  levelRow: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 30 },
-  levelBar: { width: 3, borderRadius: 3, backgroundColor: GREEN },
-
-  controls:       { alignItems: 'center', gap: 12, width: '100%', paddingHorizontal: 32 },
-  recordBtn: {
-    width: 72, height: 72, borderRadius: 36, backgroundColor: GREEN,
-    justifyContent: 'center', alignItems: 'center',
-    shadowColor: GREEN, shadowOpacity: 0.4, shadowRadius: 12, elevation: 6,
-  },
-  activeControls: { flexDirection: 'row', gap: 16, alignItems: 'center' },
-  cancelBtn: {
-    width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(231,76,60,0.12)',
-    borderWidth: 1.5, borderColor: '#E74C3C', justifyContent: 'center', alignItems: 'center',
-  },
-  sendBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: GREEN, borderRadius: 28, paddingHorizontal: 24, paddingVertical: 14,
-    shadowColor: GREEN, shadowOpacity: 0.35, shadowRadius: 10, elevation: 5,
-  },
-  sendBtnText: { fontSize: 16, fontWeight: '800', color: '#FFF' },
-  hint:        { fontSize: 12, color: '#9CA3AF', textAlign: 'center', lineHeight: 18 },
+  statusPillActive: { borderColor: PRIMARY },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusLabel: { fontSize: 14, fontWeight: '700', color: TEXT },
 
   resultCard: {
-    backgroundColor: '#FFF', borderRadius: 16, padding: 16, marginHorizontal: 20,
-    borderWidth: 1, borderColor: '#E5E7EB',
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+    backgroundColor: GLASS, borderRadius: 20, padding: 16, gap: 4,
+    borderWidth: 1, borderColor: GBORDER, maxWidth: W - 48,
   },
-  resultRow:          { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  resultTranscription:{ fontSize: 12, color: '#6B7280', flex: 1, fontStyle: 'italic', lineHeight: 18 },
-  resultReply:        { fontSize: 13, color: '#1E293B', flex: 1, lineHeight: 19 },
-  errorText:          { fontSize: 13, color: '#E74C3C' },
-  viewChatBtn:        { marginTop: 10, alignSelf: 'flex-end' },
-  viewChatText:       { fontSize: 12, color: GREEN, fontWeight: '700' },
-});
+  errorText:    { fontSize: 13, color: DANGER, textAlign: 'center' },
+  resultRow:    { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  resultTrans:  { fontSize: 13, color: MUTED, flex: 1, lineHeight: 18 },
+  resultReply:  { fontSize: 13, color: TEXT, flex: 1, lineHeight: 18 },
+  viewChatBtn:  { alignItems: 'flex-end', marginTop: 8 },
+  viewChatText: { fontSize: 12, color: PRIMARY, fontWeight: '700' },
 
-// History tab
-const H2 = StyleSheet.create({
-  list:        { padding: 16, gap: 10 },
-  sectionLabel:{ fontSize: 11, fontWeight: '700', color: '#9CA3AF', letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 4 },
-  card: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#FFF', borderRadius: 14, padding: 14,
-    borderWidth: 1, borderColor: '#E5E7EB',
-    shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 4, elevation: 1,
-  },
-  iconBox:   { width: 44, height: 44, borderRadius: 12, justifyContent: 'center', alignItems: 'center' },
-  title:     { fontSize: 14, fontWeight: '700', color: '#1E293B', marginBottom: 3 },
-  pill:      { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 3 },
-  dot:       { width: 6, height: 6, borderRadius: 3 },
-  pillText:  { fontSize: 11, fontWeight: '600' },
-  meta:      { fontSize: 11, color: '#9CA3AF' },
-  loader:    { flex: 1, justifyContent: 'center', alignItems: 'center', gap: 12 },
-  loaderText:{ fontSize: 13, color: '#9CA3AF' },
-  empty:     { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40, gap: 12 },
-  emptyTitle:{ fontSize: 18, fontWeight: '800', color: '#1E293B' },
-  emptyMsg:  { fontSize: 13, color: '#9CA3AF', textAlign: 'center', lineHeight: 20 },
-  startBtn:  { marginTop: 8, backgroundColor: GREEN, borderRadius: 20, paddingHorizontal: 24, paddingVertical: 10 },
-  startBtnText: { fontSize: 14, fontWeight: '700', color: '#FFF' },
-});
-
-// Voice orb
-const O = StyleSheet.create({
-  outerHalo: {
-    width: SPHERE_D + 40, height: SPHERE_D + 40, borderRadius: (SPHERE_D + 40) / 2,
-    backgroundColor: 'rgba(29,185,84,0.06)', borderWidth: 1, borderColor: 'rgba(29,185,84,0.12)',
+  controls:   { alignItems: 'center', gap: 12, width: '100%', paddingHorizontal: 32 },
+  activeRow:  { flexDirection: 'row', gap: 20, alignItems: 'center' },
+  micBtn:     { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', shadowColor: PRIMARY, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 10 },
+  micGrad:    { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  cancelBtn:  {
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: 'rgba(239,68,68,0.10)', borderWidth: 1.5, borderColor: DANGER,
     justifyContent: 'center', alignItems: 'center',
   },
-  sphere: {
-    width: SPHERE_D, height: SPHERE_D, borderRadius: SPHERE_D / 2,
-    overflow: 'hidden', justifyContent: 'center', alignItems: 'center',
-  },
-  sphereBase: { ...StyleSheet.absoluteFillObject, backgroundColor: '#021208' },
-  coreGlow: {
-    position: 'absolute', width: 40, height: 40, borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    shadowColor: '#FFF', shadowOpacity: 0.9, shadowRadius: 16,
-  },
-  shine: {
-    position: 'absolute', top: 14, left: 18, width: 38, height: 22,
-    borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.10)',
-    transform: [{ rotate: '-28deg' }],
-  },
-  processingOverlay: {
-    ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'center', alignItems: 'center',
-  },
+  sendRecBtn: { borderRadius: 28, overflow: 'hidden', shadowColor: USER_A, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.4, shadowRadius: 12, elevation: 8 },
+  sendRecGrad: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 24, paddingVertical: 14 },
+  sendRecText: { fontSize: 15, fontWeight: '800', color: '#FFF' },
+  hint: { fontSize: 12, color: MUTED, textAlign: 'center', maxWidth: 260, lineHeight: 18 },
 });
