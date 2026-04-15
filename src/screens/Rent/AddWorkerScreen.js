@@ -13,10 +13,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
 import api from '../../services/api';
 import { compressImage, compressVideo } from '../../utils/mediaCompressor';
 import { useLanguage } from '../../context/LanguageContext';
+import { useLocation } from '../../context/LocationContext';
 
 const GREEN = '#2D9162';
 
@@ -52,7 +52,8 @@ function FieldInput({ label, value, onChangeText, placeholder, keyboardType, mul
 
 export default function AddWorkerScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { t } = useLanguage();
+  const { t }         = useLanguage();
+  const { coords: gpsCoords } = useLocation();
 
   const [workerType,    setWorkerType]    = useState('individual'); // individual | group
   const [name,          setName]          = useState('');
@@ -75,26 +76,17 @@ export default function AddWorkerScreen({ navigation }) {
   const [video,         setVideo]         = useState(null); // { uri, url }
   const [lat,           setLat]           = useState(null);
   const [lng,           setLng]           = useState(null);
-  const [gpsLoading,    setGpsLoading]    = useState(false);
+  const gpsLoading = false; // GPS fetched globally at app start
   const [uploading,     setUploading]     = useState(false);
   const [submitting,    setSubmitting]    = useState(false);
 
-  // ── Fetch device GPS ──────────────────────────────────────────────────────
-  const fetchGPS = async () => {
-    setGpsLoading(true);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert(t('rent.permissionDenied'), t('rent.locationPermission'));
-        return;
-      }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLat(pos.coords.latitude);
-      setLng(pos.coords.longitude);
-    } catch {
-      Alert.alert(t('rent.gpsError'), t('rent.gpsCouldNotFetch'));
-    } finally {
-      setGpsLoading(false);
+  // ── Use global GPS from LocationContext ──────────────────────────────────
+  const fetchGPS = () => {
+    if (gpsCoords) {
+      setLat(gpsCoords.latitude);
+      setLng(gpsCoords.longitude);
+    } else {
+      Alert.alert(t('rent.permissionDenied'), t('rent.locationPermission'));
     }
   };
 

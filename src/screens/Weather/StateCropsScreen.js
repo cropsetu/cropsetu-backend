@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import * as Location from 'expo-location'; // reverseGeocodeAsync only
+import { useLocation } from '../../context/LocationContext';
 import { COLORS, SHADOWS } from '../../constants/colors';
 import { useLanguage } from '../../context/LanguageContext';
 import {
@@ -158,6 +159,7 @@ function SearchInput({ value, onChangeText, placeholder }) {
 // ── Main Screen ────────────────────────────────────────────────────────────────
 export default function StateCropsScreen({ navigation, route }) {
   const { t } = useLanguage();
+  const { coords: gpsCoords } = useLocation();
   // Accept pre-selected state from navigation params or weather page
   const initialState = route.params?.state || null;
   const [selectedState, setSelectedState] = useState(initialState || 'Maharashtra');
@@ -178,12 +180,10 @@ export default function StateCropsScreen({ navigation, route }) {
   const detectLocation = useCallback(async () => {
     try {
       setDetecting(true);
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (!gpsCoords) return;
       const [place] = await Location.reverseGeocodeAsync({
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
+        latitude: gpsCoords.latitude,
+        longitude: gpsCoords.longitude,
       });
       // place.region = state name in India, subregion = district
       const locStr = [place?.region, place?.subregion, place?.city]
@@ -191,11 +191,11 @@ export default function StateCropsScreen({ navigation, route }) {
       const detected = detectStateFromLocation(locStr);
       if (detected) switchState(detected);
     } catch (e) {
-      // permission denied or location unavailable — keep current state
+      // reverseGeocode failed — keep current state
     } finally {
       setDetecting(false);
     }
-  }, [switchState]);
+  }, [switchState, gpsCoords]);
 
   // Auto-detect on first load only when no state was passed by caller
   useEffect(() => {

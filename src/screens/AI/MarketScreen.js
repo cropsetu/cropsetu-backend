@@ -7,7 +7,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Location from 'expo-location';
+import * as Location from 'expo-location'; // reverseGeocodeAsync only
+import { useLocation } from '../../context/LocationContext';
 import { getMandiPrices, getAgriHistoricalPrices, getAgriPrediction,
   getAgriNearbyComparison, triggerAgriSync } from '../../services/aiApi';
 import { INDIA_STATES_LIST, INDIA_DISTRICTS, STATE_GPS_MAP, getDistricts } from '../../constants/indiaLocations';
@@ -467,6 +468,7 @@ function StatPill({ label, value, color }) {
 export default function MarketScreen({ navigation }) {
   const insets = useSafeAreaInsets();
   const { t }  = useLanguage();
+  const { coords: gpsCoords } = useLocation();
 
   // ── Filters ──
   const [selectedCrop, setSelectedCrop]         = useState(DEFAULT_CROP);
@@ -501,20 +503,17 @@ export default function MarketScreen({ navigation }) {
 
   const contentAnim = useRef(new Animated.Value(0)).current;
 
-  // ── On mount: auto-detect GPS location ──
+  // ── On mount: auto-detect location from global GPS context ──
   useEffect(() => {
     (async () => {
       setLocationDetecting(true);
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (gpsCoords) {
           const geo = await Location.reverseGeocodeAsync(
-            { latitude: pos.coords.latitude, longitude: pos.coords.longitude },
+            { latitude: gpsCoords.latitude, longitude: gpsCoords.longitude },
           );
           if (geo?.length) {
             const place = geo[0];
-            // Map iOS/Android region → our supported state names
             const rawState    = place.region || '';
             const rawDistrict = place.subregion || place.city || '';
             const mappedState = STATE_GPS_MAP[rawState.trim()] || rawState.trim() || 'Maharashtra';
@@ -530,7 +529,7 @@ export default function MarketScreen({ navigation }) {
       finally { setLocationDetecting(false); }
       loadMandiPrices(DEFAULT_CROP, 'Maharashtra', '');
     })();
-  }, []);
+  }, [gpsCoords]);
 
   // ── Load districts whenever state changes — instant from static list ──
   useEffect(() => {

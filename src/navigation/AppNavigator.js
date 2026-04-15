@@ -190,8 +190,11 @@ import DoctorHome           from '../screens/Doctor/DoctorHome';
 import DoctorDetail         from '../screens/Doctor/DoctorDetail';
 
 // Profile
-import ProfileScreen        from '../screens/Profile/ProfileScreen';
-import MyRentListingsScreen from '../screens/Rent/MyRentListingsScreen';
+import ProfileScreen           from '../screens/Profile/ProfileScreen';
+import MyRentListingsScreen    from '../screens/Rent/MyRentListingsScreen';
+import MyOrdersScreen          from '../screens/Profile/MyOrdersScreen';
+import SavedPostsScreen        from '../screens/Profile/SavedPostsScreen';
+import MyAnimalListingsScreen  from '../screens/Profile/MyAnimalListingsScreen';
 
 // Seller Portal (integrated)
 import SellerDashboard      from '../screens/Seller/DashboardScreen';
@@ -317,9 +320,12 @@ function SellerNavigator() {
 function ProfileNavigator() {
   return (
     <ProfileStack.Navigator screenOptions={defaultScreenOptions}>
-      <ProfileStack.Screen name="ProfileHome"    component={ProfileScreen}        options={{ headerShown: false }} />
-      <ProfileStack.Screen name="MyRentListings" component={MyRentListingsScreen} options={{ headerShown: false }} />
-      <ProfileStack.Screen name="SellerPortal"   component={SellerNavigator}      options={{ headerShown: false }} />
+      <ProfileStack.Screen name="ProfileHome"         component={ProfileScreen}           options={{ headerShown: false }} />
+      <ProfileStack.Screen name="MyRentListings"      component={MyRentListingsScreen}    options={{ headerShown: false }} />
+      <ProfileStack.Screen name="SellerPortal"        component={SellerNavigator}         options={{ headerShown: false }} />
+      <ProfileStack.Screen name="MyOrders"            component={MyOrdersScreen}          options={{ headerShown: false }} />
+      <ProfileStack.Screen name="SavedPosts"          component={SavedPostsScreen}        options={{ headerShown: false }} />
+      <ProfileStack.Screen name="MyAnimalListings"    component={MyAnimalListingsScreen}  options={{ headerShown: false }} />
     </ProfileStack.Navigator>
   );
 }

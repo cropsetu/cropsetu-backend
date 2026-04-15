@@ -13,9 +13,9 @@ import {
   Animated, Alert, Platform, FlatList, Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { useLanguage } from '../../context/LanguageContext';
+import { useLocation } from '../../context/LocationContext';
 import api from '../../services/api';
 
 const { width: SCREEN_W } = Dimensions.get('window');
@@ -785,13 +785,8 @@ function Step3({ crop, photos, onNext, onBack }) {
   useEffect(() => {
     (async () => {
       try {
-        let lat = 18.52, lon = 73.86;
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          lat = loc.coords.latitude;
-          lon = loc.coords.longitude;
-        }
+        const lat = gpsCoords?.latitude  ?? 18.52;
+        const lon = gpsCoords?.longitude ?? 73.86;
         const url =
           `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
           `&current=temperature_2m,relative_humidity_2m,precipitation,wind_speed_10m` +
@@ -810,7 +805,7 @@ function Step3({ crop, photos, onNext, onBack }) {
         setLoadingWx(false);
       }
     })();
-  }, []);
+  }, [gpsCoords]);
 
   const conditions = weather ? [
     {
@@ -1295,6 +1290,7 @@ function Step4({ crop, soil, landSize, prevCrop, weather, photos, detections, on
 // ─────────────────────────────────────────────────────────────────────────────
 export default function AIRecommendation({ navigation }) {
   const { t } = useLanguage();
+  const { coords: gpsCoords } = useLocation(); // global GPS — no extra prompt
   const [step,       setStep]       = useState(1);
   const [crop,       setCrop]       = useState(null);
   const [landSize,   setLandSize]   = useState('');

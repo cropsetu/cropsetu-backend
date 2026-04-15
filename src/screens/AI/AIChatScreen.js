@@ -35,14 +35,13 @@ const USER_B   = '#0D9488';
 const DANGER   = '#EF4444';
 
 // ─── Voice modal dark tokens ──────────────────────────────────────────────────
-const V_BG    = '#071009';
+const V_BG    = '#000000';
 const V_GLASS = 'rgba(34,197,94,0.07)';
 const V_BORD  = 'rgba(34,197,94,0.18)';
 const V_TEXT  = '#F0FDF4';
 const V_MUTED = 'rgba(134,239,172,0.55)';
 
-// ─── Particle Word Sphere (WebView canvas — Fibonacci sphere → text morphing) ──
-const SPHERE_H = H * 0.46;
+// ─── Particle Word Sphere fills the entire modal screen ──────────────────────
 
 // Minified HTML+JS for the particle word visualizer.
 // Rendering pipeline: Fibonacci sphere (idle) → off-screen canvas text sampling
@@ -83,7 +82,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;}
   }
 
   function initSphere(){
-    var R=Math.min(W,H)*0.38;
+    var R=Math.min(W,H)*0.44;
     for(var i=0;i<N;i++){
       var p=Math.acos(1-2*(i+0.5)/N),a=PHI*i;
       tx[i]=Math.sin(p)*Math.cos(a)*R;
@@ -159,7 +158,7 @@ canvas{position:fixed;inset:0;width:100%;height:100%;}
   }
 
   function draw(){
-    ctx.fillStyle='rgba(7,16,9,0.22)';ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='rgba(0,0,0,0.20)';ctx.fillRect(0,0,W,H);
     for(var i=0;i<N;i++){
       var z=pz[i]+CAM;if(z<10)continue;
       var sc=FOV/z,sx=px[i]*sc+CX,sy2=py[i]*sc+CY;
@@ -232,13 +231,13 @@ function ParticleWordSphere({ isListening, audioLevel, transcript }) {
 
   // WebView native module is not available on web preview — render a placeholder
   if (Platform.OS === 'web') {
-    return <View style={{ width: W, height: SPHERE_H, alignItems: 'center', justifyContent: 'center' }}>
+    return <View style={[StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
       <Text style={{ color: V_MUTED, fontSize: 12 }}>Voice sphere — run on device</Text>
     </View>;
   }
 
   return (
-    <View style={{ width: W, height: SPHERE_H }}>
+    <View style={StyleSheet.absoluteFill}>
       <WebView
         ref={wvRef}
         source={{ html: PARTICLE_WORD_HTML }}
@@ -331,7 +330,23 @@ function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, 
 
   return (
     <Animated.View style={[VM.root, { transform: [{ translateY: slideAnim }] }]}>
-      {/* Close / header */}
+
+      {/* ── Full-screen particle sphere (background layer) ── */}
+      <ParticleWordSphere
+        isListening={isRecording}
+        audioLevel={audioLevel}
+        transcript={voiceResult?.transcription || ''}
+      />
+
+      {/* ── Radial glow at sphere center for depth ── */}
+      <LinearGradient
+        colors={['transparent', 'rgba(0,0,0,0.55)', 'rgba(0,0,0,0.88)', '#000']}
+        locations={[0, 0.45, 0.72, 1]}
+        style={VM.scrim}
+        pointerEvents="none"
+      />
+
+      {/* ── Header overlay (top) ── */}
       <View style={[VM.header, { paddingTop: insets.top + 10 }]}>
         <TouchableOpacity onPress={onClose} style={VM.closeBtn} activeOpacity={0.7}>
           <Ionicons name="chevron-down" size={24} color={V_MUTED} />
@@ -340,15 +355,7 @@ function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, 
         <View style={{ width: 44 }} />
       </View>
 
-      {/* Particle Word Sphere: idle=rotating Fibonacci sphere, listening=audio-reactive,
-          transcription received=particles morph into the spoken text */}
-      <ParticleWordSphere
-        isListening={isRecording}
-        audioLevel={audioLevel}
-        transcript={voiceResult?.transcription || ''}
-      />
-
-      {/* Error card — only shown when something went wrong */}
+      {/* ── Error card ── */}
       {voiceResult?.error && !isRecording && !isProcessing && (
         <Animated.View style={[VM.resultCard, { opacity: transFade }]}>
           <Text style={VM.errorText}>⚠ {voiceResult.error}</Text>
@@ -358,8 +365,8 @@ function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, 
         </Animated.View>
       )}
 
-      {/* Controls */}
-      <View style={[VM.controls, { paddingBottom: insets.bottom + 28 }]}>
+      {/* ── Controls overlay (bottom) ── */}
+      <View style={[VM.controls, { paddingBottom: insets.bottom + 32 }]}>
         {isProcessing ? (
           <View style={VM.processingRow}>
             <ActivityIndicator color={P_LIGHT} size="small" />
@@ -1069,83 +1076,97 @@ const S = StyleSheet.create({
   mktTipText: { fontSize: 11, color: TEXT2, lineHeight: 16, flex: 1 },
 });
 
-// ── Voice modal styles (dark) ──────────────────────────────────────────────
-const MIC_WRAP = 160; // outer container holding rings + button
+// ── Voice modal styles (dark — full-screen particle bg + overlaid controls) ──
+const MIC_WRAP = 164;
 const VM = StyleSheet.create({
-  root: { position: 'absolute', inset: 0, backgroundColor: V_BG, zIndex: 100 },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 4 },
-  closeBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', backgroundColor: V_GLASS },
-  headerTitle: { fontSize: 15, fontWeight: '700', color: V_TEXT },
+  // Root fills entire screen; black bg shows behind WebView while it loads
+  root: { position: 'absolute', inset: 0, backgroundColor: '#000', zIndex: 100 },
 
-  resultCard: { backgroundColor: V_GLASS, borderRadius: 20, padding: 16, gap: 4, borderWidth: 1, borderColor: V_BORD, maxWidth: W - 48, marginHorizontal: 24 },
+  // Gradient scrim — covers bottom half so controls are readable over particles
+  scrim: { position: 'absolute', bottom: 0, left: 0, right: 0, height: H * 0.55 },
+
+  // Header — floats at top of screen
+  header: {
+    position: 'absolute', top: 0, left: 0, right: 0,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingBottom: 4,
+  },
+  closeBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  headerTitle: { fontSize: 15, fontWeight: '700', color: V_TEXT, letterSpacing: 0.3 },
+
+  // Error card — centred vertically
+  resultCard: {
+    position: 'absolute', left: 24, right: 24,
+    top: H * 0.55,
+    backgroundColor: 'rgba(239,68,68,0.12)', borderRadius: 20, padding: 16,
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)',
+  },
   errorText: { fontSize: 13, color: DANGER, textAlign: 'center' },
   retryBtn: { marginTop: 12, alignSelf: 'center' },
   retryText: { fontSize: 13, color: P_LIGHT, fontWeight: '700' },
 
-  controls: { alignItems: 'center', gap: 6, width: '100%', paddingHorizontal: 24 },
-  processingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  // Controls — pinned to bottom, overlaid on the scrim
+  controls: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    alignItems: 'center', gap: 4,
+    paddingHorizontal: 24,
+  },
+  processingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12 },
   processingText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
 
-  listeningLabel: { fontSize: 17, fontWeight: '600', color: V_TEXT, letterSpacing: 0.3 },
-  bigTimer: { fontSize: 38, fontWeight: '100', color: V_TEXT, letterSpacing: 5, marginBottom: 20 },
+  listeningLabel: { fontSize: 16, fontWeight: '500', color: V_MUTED, letterSpacing: 1.5, textTransform: 'uppercase' },
+  bigTimer: { fontSize: 44, fontWeight: '100', color: V_TEXT, letterSpacing: 6, marginBottom: 16 },
 
   // Three-button row
-  threeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 28 },
+  threeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 32, width: '100%' },
   sideBtnWrap: { alignItems: 'center', gap: 8 },
-  sideBtnLabel: { fontSize: 12, color: V_MUTED, fontWeight: '500' },
+  sideBtnLabel: { fontSize: 11, color: V_MUTED, fontWeight: '500', letterSpacing: 0.5 },
   cancelCircle: {
-    width: 58, height: 58, borderRadius: 29,
-    borderWidth: 1.5, borderColor: DANGER,
-    backgroundColor: 'rgba(239,68,68,0.1)',
+    width: 56, height: 56, borderRadius: 28,
+    borderWidth: 1, borderColor: 'rgba(239,68,68,0.6)',
+    backgroundColor: 'rgba(239,68,68,0.08)',
     justifyContent: 'center', alignItems: 'center',
   },
   pauseCircle: {
-    width: 58, height: 58, borderRadius: 29,
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    width: 56, height: 56, borderRadius: 28,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
     justifyContent: 'center', alignItems: 'center',
   },
 
-  // Center mic button with rings
-  micWrap: {
-    width: MIC_WRAP, height: MIC_WRAP,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  // Rings — absolutely positioned, centered inside micWrap
+  // Center mic button + rings
+  micWrap: { width: MIC_WRAP, height: MIC_WRAP, alignItems: 'center', justifyContent: 'center' },
   ring3: {
     position: 'absolute',
-    width: MIC_WRAP, height: MIC_WRAP,
-    borderRadius: MIC_WRAP / 2,
-    backgroundColor: P_LIGHT,
-    top: 0, left: 0,
+    width: MIC_WRAP, height: MIC_WRAP, borderRadius: MIC_WRAP / 2,
+    backgroundColor: P_LIGHT, top: 0, left: 0,
   },
   ring2: {
     position: 'absolute',
-    width: MIC_WRAP * 0.75, height: MIC_WRAP * 0.75,
-    borderRadius: MIC_WRAP * 0.375,
+    width: MIC_WRAP * 0.73, height: MIC_WRAP * 0.73, borderRadius: MIC_WRAP * 0.365,
     backgroundColor: P_LIGHT,
-    top: MIC_WRAP * 0.125, left: MIC_WRAP * 0.125,
+    top: MIC_WRAP * 0.135, left: MIC_WRAP * 0.135,
   },
   ring1: {
     position: 'absolute',
-    width: MIC_WRAP * 0.575, height: MIC_WRAP * 0.575,
-    borderRadius: MIC_WRAP * 0.2875,
+    width: MIC_WRAP * 0.54, height: MIC_WRAP * 0.54, borderRadius: MIC_WRAP * 0.27,
     backgroundColor: P_LIGHT,
-    top: MIC_WRAP * 0.2125, left: MIC_WRAP * 0.2125,
+    top: MIC_WRAP * 0.23, left: MIC_WRAP * 0.23,
   },
   micBtn: {
-    width: 82, height: 82, borderRadius: 41, overflow: 'hidden',
-    shadowColor: P_LIGHT,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
-    shadowRadius: 20,
-    elevation: 14,
+    width: 84, height: 84, borderRadius: 42, overflow: 'hidden',
+    shadowColor: P_LIGHT, shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.9, shadowRadius: 28, elevation: 18,
   },
   micGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  doneHint: { fontSize: 12, color: V_MUTED, marginTop: 14, letterSpacing: 0.3 },
+  doneHint: { fontSize: 11, color: V_MUTED, marginTop: 12, letterSpacing: 0.5 },
 
-  successRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  successText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
+  successRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 16 },
+  successText: { fontSize: 15, color: V_TEXT, fontWeight: '600' },
 });
 
 // ── Sidebar styles (light) ─────────────────────────────────────────────────

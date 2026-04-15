@@ -13,7 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { getPestAlerts } from '../../services/aiApi';
-import * as Location from 'expo-location';
+import { useLocation } from '../../context/LocationContext';
 
 const BG     = '#0A140A';
 const GREEN  = '#2ECC71';
@@ -141,6 +141,7 @@ function AlertDetail({ alert, language, onBack }) {
 export default function PestAlertsScreen({ navigation }) {
   const { user } = useAuth();
   const { language } = useLanguage();
+  const { coords: gpsCoords } = useLocation();
   const [alerts, setAlerts]     = useState([]);
   const [loading, setLoading]   = useState(false);
   const [selected, setSelected] = useState(null);
@@ -151,18 +152,9 @@ export default function PestAlertsScreen({ navigation }) {
     setLoading(true);
     setError(null);
     try {
-      let lat = user?.lat || 19.9975;
-      let lon = user?.lon || 73.7898;
-
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          lat = pos.coords.latitude;
-          lon = pos.coords.longitude;
-          setLocName(`${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E`);
-        }
-      } catch {}
+      const lat = gpsCoords?.latitude  ?? user?.lat ?? 19.9975;
+      const lon = gpsCoords?.longitude ?? user?.lon ?? 73.7898;
+      if (gpsCoords) setLocName(`${lat.toFixed(2)}°N, ${lon.toFixed(2)}°E`);
 
       const crops = user?.crops?.length ? user.crops : [];
       const result = await getPestAlerts(lat, lon, crops, user?.state || 'Maharashtra', user?.district);
@@ -177,7 +169,7 @@ export default function PestAlertsScreen({ navigation }) {
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [user, gpsCoords]);
 
   useEffect(() => { fetchAlerts(); }, [fetchAlerts]);
 

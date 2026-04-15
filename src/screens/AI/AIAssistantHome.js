@@ -19,6 +19,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { fetchWeatherForCurrentLocation } from '../../services/weatherApi';
+import FarmProfileBanner from '../../components/FarmProfileBanner';
 
 const { width: W } = Dimensions.get('window');
 const GREEN   = '#1A5C2A';
@@ -167,6 +168,12 @@ export default function AIAssistantHome({ navigation, embeddedInHub }) {
             <Ionicons name="mic" size={16} color={GREEN} />
           </View>
         </TouchableOpacity>
+
+        {/* ── Farm Profile Banner ────────────────────────────────────────── */}
+        <FarmProfileBanner
+          style={S.farmBanner}
+          onEdit={() => navigation.navigate('Account')}
+        />
 
         {/* ── Quick Services ─────────────────────────────────────────────── */}
         <View style={S.svcGrid}>
@@ -328,6 +335,11 @@ const S = StyleSheet.create({
   },
 
   // Quick services
+  farmBanner: {
+    marginHorizontal: 18,
+    marginBottom: 14,
+  },
+
   svcGrid: {
     flexDirection: 'row', justifyContent: 'space-between',
     marginHorizontal: 18, marginBottom: 6,

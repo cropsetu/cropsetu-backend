@@ -4,6 +4,7 @@
  * Uses real API (/animals) — falls back to mock data if offline
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, StatusBar, Image, ScrollView, Dimensions, Alert,
@@ -11,9 +12,10 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
+import { useLocation } from '../../context/LocationContext';
 import api from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
+import VerificationModal, { useIsVerified } from './VerificationModal';
 
 const { width: W } = Dimensions.get('window');
 const CARD_W = (W - 14 * 2 - 10) / 2;
@@ -183,47 +185,51 @@ function DistChip({ km, label, active, disabled, onPress }) {
   );
 }
 
-// ── Sort Dropdown ─────────────────────────────────────────────────────────────
-function SortDropdown({ value, onChange, t }) {
-  const [open, setOpen] = useState(false);
+// ── Sort Chip (horizontal filter chip) ────────────────────────────────────────
+function SortChip({ label, active, onPress }) {
+  const sc = useRef(new Animated.Value(1)).current;
+  const pressIn  = () => Animated.spring(sc, { toValue: 0.92, useNativeDriver: true, speed: 50 }).start();
+  const pressOut = () => Animated.spring(sc, { toValue: 1, useNativeDriver: true, friction: 4 }).start();
   return (
-    <View style={S.sortWrap}>
-      <TouchableOpacity style={S.sortBtn} onPress={() => setOpen(o => !o)}>
-        <Ionicons name="swap-vertical-outline" size={13} color={GREEN} />
-        <Text style={S.sortBtnTxt}>{t(`animal.${value}`)}</Text>
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={GREEN} />
+    <Animated.View style={{ transform: [{ scale: sc }] }}>
+      <TouchableOpacity
+        style={[S.sortChip, active && S.sortChipActive]}
+        onPress={onPress}
+        onPressIn={pressIn}
+        onPressOut={pressOut}
+        activeOpacity={1}
+      >
+        <Text style={[S.sortChipTxt, active && S.sortChipTxtActive]}>{label}</Text>
       </TouchableOpacity>
-      {open ? (
-        <View style={S.dropdown}>
-          {SORT_KEYS.map(key => (
-            <TouchableOpacity
-              key={key}
-              style={S.dropItem}
-              onPress={() => { onChange(key); setOpen(false); }}
-            >
-              <Text style={[S.dropItemTxt, key === value && S.dropItemActive]}>{t(`animal.${key}`)}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : null}
-    </View>
+    </Animated.View>
   );
 }
 
 // ── List header ────────────────────────────────────────────────────────────────
 function ListHeader({ count, sortBy, onSortChange, t }) {
   return (
-    <View style={S.sectionHeader}>
-      <View style={S.sectionLeft}>
-        <View style={S.starBadge}>
-          <Ionicons name="star" size={11} color="#fff" />
-        </View>
-        <Text style={S.sectionTitle}>{t('animal.allAnimals')}</Text>
-        <View style={S.countBadge}>
-          <Text style={S.countBadgeTxt}>{count}</Text>
+    <View style={S.listHeader}>
+      <View style={S.sectionHeader}>
+        <View style={S.sectionLeft}>
+          <View style={S.starBadge}>
+            <Ionicons name="star" size={11} color="#fff" />
+          </View>
+          <Text style={S.sectionTitle}>{t('animal.allAnimals')}</Text>
+          <View style={S.countBadge}>
+            <Text style={S.countBadgeTxt}>{count}</Text>
+          </View>
         </View>
       </View>
-      <SortDropdown value={sortBy} onChange={onSortChange} t={t} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.sortRow}>
+        {SORT_KEYS.map(key => (
+          <SortChip
+            key={key}
+            label={t(`animal.${key}`)}
+            active={sortBy === key}
+            onPress={() => onSortChange(key)}
+          />
+        ))}
+      </ScrollView>
     </View>
   );
 }
@@ -244,36 +250,32 @@ function CardRow({ pair, onPress, t, rowIndex = 0 }) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function AnimalTradeHome({ navigation }) {
   const { t } = useLanguage();
+  // ── Use global GPS from LocationContext (fetched once at app start) ─────────
+  const { coords, permissionGranted, loading: gpsLoading } = useLocation();
+  const userLocation = coords;
+  const locStatus    = gpsLoading ? 'loading' : permissionGranted ? 'granted' : 'denied';
+
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery,  setSearchQuery]  = useState('');
   const [sortBy,       setSortBy]       = useState('sortLatest');
   const [distanceKm,   setDistanceKm]   = useState(null);
-  const [userLocation, setUserLocation] = useState(null);
-  const [locStatus,    setLocStatus]    = useState('idle');
   const [listings,     setListings]     = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [refreshing,   setRefreshing]   = useState(false);
-
-  // Request GPS on mount
-  useEffect(() => {
-    (async () => {
-      setLocStatus('loading');
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') { setLocStatus('denied'); return; }
-      try {
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setUserLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-        setLocStatus('granted');
-      } catch {
-        setLocStatus('denied');
-      }
-    })();
-  }, []);
+  const [isVerified,   setIsVerified]   = useIsVerified();
+  const [verifyOpen,   setVerifyOpen]   = useState(false);
 
   // Fetch from API whenever filter/search/distance changes
   useEffect(() => {
     fetchListings();
   }, [activeFilter, searchQuery, distanceKm, userLocation, sortBy]);
+
+  // Re-fetch when returning to this screen (e.g., after posting a new listing)
+  useFocusEffect(
+    useCallback(() => {
+      fetchListings();
+    }, [])
+  );
 
   async function fetchListings(isRefresh = false) {
     if (isRefresh) setRefreshing(true);
@@ -333,11 +335,8 @@ export default function AnimalTradeHome({ navigation }) {
       {/* ── Header ── */}
       <View style={S.header}>
         <View style={S.topBar}>
-          <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
-            <Ionicons name="arrow-back" size={22} color="#1A1A1A" />
-          </TouchableOpacity>
           <View style={S.searchBar}>
-            <Ionicons name="search-outline" size={15} color="#999" />
+            <Ionicons name="search-outline" size={16} color="#999" />
             <TextInput
               style={S.searchInput}
               placeholder={t('animal.searchPlaceholder')}
@@ -347,12 +346,12 @@ export default function AnimalTradeHome({ navigation }) {
             />
             {searchQuery.length > 0 ? (
               <TouchableOpacity onPress={() => setSearchQuery('')}>
-                <Ionicons name="close-circle" size={16} color="#bbb" />
+                <Ionicons name="close-circle" size={18} color="#bbb" />
               </TouchableOpacity>
             ) : null}
           </View>
           <TouchableOpacity style={S.addBtn} onPress={() => navigation.navigate('AddAnimalListing')}>
-            <Ionicons name="add" size={22} color={GREEN} />
+            <Ionicons name="add" size={24} color="#fff" />
           </TouchableOpacity>
         </View>
 
@@ -441,11 +440,26 @@ export default function AnimalTradeHome({ navigation }) {
         )}
       />
 
+      {/* Verify Banner */}
+      {!isVerified && (
+        <TouchableOpacity style={S.verifyBanner} onPress={() => setVerifyOpen(true)} activeOpacity={0.85}>
+          <Ionicons name="shield-checkmark-outline" size={18} color="#fff" />
+          <Text style={S.verifyBannerText}>Verify with Aadhaar to get Verified Badge</Text>
+          <Ionicons name="chevron-forward" size={16} color="#fff" />
+        </TouchableOpacity>
+      )}
+
       {/* FAB */}
       <TouchableOpacity style={S.fab} onPress={() => navigation.navigate('AddAnimalListing')}>
         <Ionicons name="add" size={20} color="#fff" />
         <Text style={S.fabTxt}>{t('animal.postAd')}</Text>
       </TouchableOpacity>
+
+      <VerificationModal
+        visible={verifyOpen}
+        onClose={() => setVerifyOpen(false)}
+        onVerified={() => setIsVerified(true)}
+      />
     </View>
   );
 }
@@ -454,14 +468,18 @@ const S = StyleSheet.create({
   root: { flex: 1, backgroundColor: BG },
 
   header:   { backgroundColor: '#fff', paddingTop: 44, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  topBar:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 12, gap: 10 },
-  backBtn:  { padding: 2 },
-  addBtn:   { padding: 2 },
+  topBar:   { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingBottom: 14, gap: 10 },
+  addBtn:   {
+    width: 44, height: 44, borderRadius: 12, backgroundColor: GREEN,
+    alignItems: 'center', justifyContent: 'center',
+  },
   searchBar: {
     flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: BG, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 9,
+    backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10,
+    borderWidth: 1.5, borderColor: '#E8E8E8',
+    shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
-  searchInput: { flex: 1, fontSize: 13, color: '#1A1A1A', padding: 0 },
+  searchInput: { flex: 1, fontSize: 14, color: '#1A1A1A', padding: 0, fontFamily: 'Inter_400Regular' },
 
   catRow:           { paddingHorizontal: 12, paddingBottom: 12, gap: 8 },
   catWrap:          { alignItems: 'center', gap: 5, width: 64 },
@@ -469,7 +487,7 @@ const S = StyleSheet.create({
                       shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   catImgWrapActive: { borderColor: GREEN, shadowColor: GREEN, shadowOpacity: 0.35, elevation: 4 },
   catImg:           { width: '100%', height: '100%' },
-  catLabel:         { fontSize: 10, fontWeight: '700', color: '#888', textAlign: 'center' },
+  catLabel:         { fontSize: 10, fontWeight: '700', color: '#888', textAlign: 'center', fontFamily: 'Inter_700Bold' },
   catLabelActive:   { color: GREEN },
 
   distRow:          { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingBottom: 12, gap: 10 },
@@ -483,27 +501,24 @@ const S = StyleSheet.create({
   distChipTxtActive:{ color: '#fff' },
 
   list: { padding: 14, paddingBottom: 100 },
+  listHeader:    { marginBottom: 12, gap: 10 },
   sectionHeader: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
   },
   sectionLeft:   { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  starBadge:     { backgroundColor: GREEN, borderRadius: 4, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' },
-  sectionTitle:  { fontSize: 14, fontWeight: '800', color: '#1A1A1A', letterSpacing: 0.3 },
-  countBadge:    { backgroundColor: GREEN + '18', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2 },
-  countBadgeTxt: { fontSize: 12, fontWeight: '700', color: GREEN },
+  starBadge:     { backgroundColor: GREEN, borderRadius: 6, width: 24, height: 24, justifyContent: 'center', alignItems: 'center' },
+  sectionTitle:  { fontSize: 15, fontWeight: '800', color: '#1A1A1A', letterSpacing: 0.3, flex: 1, fontFamily: 'Inter_800ExtraBold' },
+  countBadge:    { backgroundColor: GREEN, borderRadius: 12, width: 24, height: 24, justifyContent: 'center', alignItems: 'center' },
+  countBadgeTxt: { fontSize: 12, fontWeight: '700', color: '#fff', fontFamily: 'Inter_700Bold' },
 
-  sortWrap:      { position: 'relative', zIndex: 10 },
-  sortBtn:       { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sortBtnTxt:    { fontSize: 12, color: GREEN, fontWeight: '700' },
-  dropdown: {
-    position: 'absolute', right: 0, top: 26,
-    backgroundColor: '#fff', borderRadius: 10, borderWidth: 1, borderColor: '#eee',
-    width: 180, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 }, elevation: 4,
+  sortRow:       { flexDirection: 'row', gap: 8, paddingRight: 16 },
+  sortChip:      {
+    paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20,
+    borderWidth: 1.5, borderColor: '#DDD', backgroundColor: '#fff',
   },
-  dropItem:      { paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' },
-  dropItemTxt:   { fontSize: 13, color: '#444', fontWeight: '500' },
-  dropItemActive:{ color: GREEN, fontWeight: '700' },
+  sortChipActive:{ backgroundColor: GREEN, borderColor: GREEN },
+  sortChipTxt:   { fontSize: 13, fontWeight: '600', color: '#666', fontFamily: 'Inter_600SemiBold' },
+  sortChipTxtActive: { color: '#fff' },
 
   row: { flexDirection: 'row', gap: 10, marginBottom: 10 },
 
@@ -539,8 +554,8 @@ const S = StyleSheet.create({
   },
 
   cardBody:   { padding: 10 },
-  animalName: { fontSize: 13, fontWeight: '800', color: '#1A1A1A', marginBottom: 3 },
-  price:      { fontSize: 15, fontWeight: '900', color: GREEN, marginBottom: 5 },
+  animalName: { fontSize: 13, fontWeight: '800', color: '#1A1A1A', marginBottom: 3, fontFamily: 'Inter_800ExtraBold' },
+  price:      { fontSize: 15, fontWeight: '900', color: GREEN, marginBottom: 5, fontFamily: 'Inter_800ExtraBold' },
   metaRow:    { flexDirection: 'row', alignItems: 'center', gap: 3, marginBottom: 5 },
   metaTxt:    { fontSize: 11, color: '#777', flex: 1 },
   statsRow:   { flexDirection: 'row', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
@@ -552,7 +567,7 @@ const S = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: 8, gap: 5,
   },
-  bookBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  bookBtnTxt: { color: '#fff', fontSize: 12, fontWeight: '800', fontFamily: 'Inter_700Bold' },
 
   emptyWrap:    { alignItems: 'center', paddingVertical: 60, paddingHorizontal: 24 },
   emptyIconBg:  { width: 80, height: 80, borderRadius: 40, backgroundColor: '#E8F5EE', justifyContent: 'center', alignItems: 'center', marginBottom: 16 },
@@ -570,5 +585,18 @@ const S = StyleSheet.create({
     shadowColor: GREEN, shadowOpacity: 0.40, shadowRadius: 14,
     shadowOffset: { width: 0, height: 5 }, elevation: 8,
   },
-  fabTxt: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  fabTxt: { color: '#fff', fontSize: 14, fontWeight: '800', fontFamily: 'Inter_800ExtraBold' },
+
+  verifyBanner: {
+    position: 'absolute', bottom: 84, left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: GREEN, borderRadius: 12,
+    paddingHorizontal: 16, paddingVertical: 12,
+    shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 }, elevation: 6,
+  },
+  verifyBannerText: {
+    flex: 1, color: '#fff', fontSize: 13, fontWeight: '600',
+    fontFamily: 'Inter_600SemiBold',
+  },
 });

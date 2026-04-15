@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, SafeAreaView, Alert, Switch, ActivityIndicator,
+  TextInput, SafeAreaView, Alert, Switch, ActivityIndicator, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
+import { useLocation } from '../../context/LocationContext';
 import { COLORS, SHADOWS } from '../../constants/colors';
 import { useLanguage } from '../../context/LanguageContext';
 import api from '../../services/api';
@@ -48,13 +48,14 @@ function InputField({ label, placeholder, value, onChangeText, keyboardType = 'd
 
 export default function AddAnimalListing({ navigation }) {
   const { t } = useLanguage();
+  const { coords } = useLocation(); // GPS already fetched globally — no extra prompt
   const [form, setForm] = useState({
     animal: '', breed: '', age: '', gender: 'Female', weight: '',
     milkYield: '', price: '', description: '', location: '', vaccinated: false,
   });
   const [photos,   setPhotos]   = useState([]);
   const [loading,  setLoading]  = useState(false);
-  const [gpsState, setGpsState] = useState('idle'); // idle | loading | done | denied
+  const [gpsState, setGpsState] = useState('idle');
 
   const update = (key, value) => setForm(f => ({ ...f, [key]: value }));
 
@@ -73,50 +74,54 @@ export default function AddAnimalListing({ navigation }) {
   };
 
   const handleSubmit = async () => {
-    if (!form.animal || !form.breed || !form.price || !form.location) {
+    // Frontend must match backend required fields — age, weight, breed, price, location, animal
+    if (!form.animal || !form.breed || !form.age || !form.weight || !form.price || !form.location) {
       Alert.alert(t('addAnimal.missingInfo'), t('addAnimal.missingInfoMsg'));
       return;
     }
+
+    // Price sanity: must parse to a positive float (backend is strict here)
+    const priceNum = parseFloat(form.price);
+    if (Number.isNaN(priceNum) || priceNum <= 0) {
+      Alert.alert(t('addAnimal.missingInfo'), 'Please enter a valid price (numbers only).');
+      return;
+    }
+
     setLoading(true);
 
-    // ── Get GPS coordinates ──────────────────────────────────────────────────
-    let lat = null;
-    let lng = null;
-    try {
-      setGpsState('loading');
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status === 'granted') {
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        lat = pos.coords.latitude;
-        lng = pos.coords.longitude;
-        setGpsState('done');
-      } else {
-        setGpsState('denied');
-      }
-    } catch {
-      setGpsState('denied');
-    }
+    // ── Use GPS coordinates from global LocationContext ──────────────────────
+    const lat = coords?.latitude  ?? null;
+    const lng = coords?.longitude ?? null;
+    setGpsState(lat != null ? 'done' : 'denied');
 
     // ── Build FormData ───────────────────────────────────────────────────────
     try {
       const formData = new FormData();
       formData.append('animal',         form.animal);
       formData.append('breed',          form.breed);
-      formData.append('age',            form.age || '—');
+      formData.append('age',            form.age);
       formData.append('gender',         form.gender === 'Male' ? 'MALE' : 'FEMALE');
-      formData.append('weight',         form.weight || '—');
-      formData.append('price',          form.price);
+      formData.append('weight',         form.weight);
+      formData.append('price',          String(priceNum));
       formData.append('sellerLocation', form.location);
-      if (form.milkYield) formData.append('milkYield',   form.milkYield + ' Litre/Day');
+      if (form.milkYield)   formData.append('milkYield',   form.milkYield + ' Litre/Day');
       if (form.description) formData.append('description', form.description);
-      if (lat != null)    formData.append('lat', String(lat));
-      if (lng != null)    formData.append('lng', String(lng));
-      if (form.vaccinated) formData.append('tags[]', 'Vaccinated');
+      if (lat != null)      formData.append('lat', String(lat));
+      if (lng != null)      formData.append('lng', String(lng));
+      if (form.vaccinated) formData.append('tags', 'Vaccinated');
 
       for (const photo of photos) {
-        const { uri: compressedUri } = await compressImage(photo.uri);
-        const filename = `photo_${Date.now()}.jpg`;
-        formData.append('images', { uri: compressedUri, name: filename, type: 'image/jpeg' });
+        try {
+          const { uri: compressedUri } = await compressImage(photo.uri);
+          const filename = `photo_${Date.now()}.jpg`;
+          // fetch→Blob: the { uri, name, type } form silently drops the body
+          // on Android with newArchEnabled=true, so backend receives no file.
+          const photoResp = await fetch(compressedUri);
+          const photoBlob = await photoResp.blob();
+          formData.append('images', photoBlob, filename);
+        } catch (imgErr) {
+          console.warn('[AddAnimalListing] image compress failed', imgErr?.message);
+        }
       }
 
       await api.post('/animals', formData, {
@@ -127,10 +132,16 @@ export default function AddAnimalListing({ navigation }) {
         { text: t('ok'), onPress: () => navigation.goBack() },
       ]);
     } catch (err) {
-      Alert.alert(
-        t('product.error'),
-        err?.response?.data?.error?.message || t('addAnimal.failedToPost')
-      );
+      // Surface the ACTUAL backend validation error so users can self-diagnose
+      const details   = err?.response?.data?.error?.details;
+      const firstDetail = Array.isArray(details) && details.length
+        ? `${details[0].path || details[0].param}: ${details[0].msg}`
+        : null;
+      const msg = firstDetail
+        || err?.response?.data?.error?.message
+        || err?.message
+        || t('addAnimal.failedToPost');
+      Alert.alert(t('product.error'), msg);
     } finally {
       setLoading(false);
     }
@@ -145,9 +156,9 @@ export default function AddAnimalListing({ navigation }) {
           <Text style={styles.sectionTitle}>{t('addAnimal.addPhotosTitle', { count: photos.length })}</Text>
           <Text style={styles.sectionSub}>{t('addAnimal.goodPhotos')}</Text>
           <View style={styles.photoRow}>
-            {photos.map((_, i) => (
+            {photos.map((photo, i) => (
               <View key={i} style={styles.photoThumb}>
-                <Ionicons name="image" size={30} color={COLORS.primaryLight} />
+                <Image source={{ uri: photo.uri }} style={styles.photoImg} />
                 <TouchableOpacity
                   style={styles.photoRemove}
                   onPress={() => setPhotos(p => p.filter((_, pi) => pi !== i))}
@@ -299,11 +310,12 @@ const styles = StyleSheet.create({
   scrollContent: { padding: 16, paddingBottom: 30 },
 
   section:      { backgroundColor: COLORS.surface, borderRadius: 16, padding: 16, marginBottom: 16, ...SHADOWS.small },
-  sectionTitle: { fontSize: 16, fontWeight: '800', color: COLORS.textDark, marginBottom: 4 },
-  sectionSub:   { fontSize: 13, color: COLORS.textLight, marginBottom: 14 },
+  sectionTitle: { fontSize: 16, fontWeight: '800', color: COLORS.textDark, marginBottom: 4, fontFamily: 'Inter_800ExtraBold' },
+  sectionSub:   { fontSize: 13, color: COLORS.textLight, marginBottom: 14, fontFamily: 'Inter_400Regular' },
 
   photoRow:     { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 10 },
-  photoThumb:   { width: 80, height: 80, borderRadius: 12, backgroundColor: COLORS.divider, justifyContent: 'center', alignItems: 'center', position: 'relative' },
+  photoThumb:   { width: 80, height: 80, borderRadius: 12, backgroundColor: COLORS.divider, justifyContent: 'center', alignItems: 'center', position: 'relative', overflow: 'hidden' },
+  photoImg:     { width: '100%', height: '100%' },
   photoRemove:  { position: 'absolute', top: -8, right: -8 },
   photoAdd:     { width: 80, height: 80, borderRadius: 12, borderWidth: 2, borderColor: COLORS.primary, borderStyle: 'dashed', justifyContent: 'center', alignItems: 'center', gap: 4 },
   photoAddText: { fontSize: 11, color: COLORS.primary, fontWeight: '600' },
@@ -315,8 +327,8 @@ const styles = StyleSheet.create({
   chipTextActive:{ color: COLORS.textWhite },
 
   inputGroup: { marginBottom: 14 },
-  inputLabel: { fontSize: 14, fontWeight: '700', color: COLORS.textDark, marginBottom: 8 },
-  input:      { backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: COLORS.textDark },
+  inputLabel: { fontSize: 14, fontWeight: '700', color: COLORS.textDark, marginBottom: 8, fontFamily: 'Inter_700Bold' },
+  input:      { backgroundColor: COLORS.inputBg, borderRadius: 12, borderWidth: 1.5, borderColor: COLORS.border, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: COLORS.textDark, fontFamily: 'Inter_400Regular' },
   textArea:   { height: 100, textAlignVertical: 'top' },
 
   genderRow:       { flexDirection: 'row', gap: 12 },
@@ -337,5 +349,5 @@ const styles = StyleSheet.create({
   bottomBar:   { padding: 16, backgroundColor: COLORS.surface, borderTopWidth: 1, borderTopColor: COLORS.border },
   submitBtn:   { borderRadius: 14, overflow: 'hidden' },
   submitInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 16, borderRadius: 14 },
-  submitText:  { fontSize: 17, fontWeight: '800', color: '#fff' },
+  submitText:  { fontSize: 17, fontWeight: '800', color: '#fff', fontFamily: 'Inter_800ExtraBold' },
 });

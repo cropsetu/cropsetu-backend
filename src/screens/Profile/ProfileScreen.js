@@ -289,9 +289,9 @@ export default function ProfileScreen({ navigation }) {
         <View style={S.section}>
           <SectionHeader title={t('profile.quickActions')} />
           <View style={S.quickGrid}>
-            <QuickTile index={0} icon="cart"     label={t('myOrders')}          color={D.green}  onPress={() => {}} />
-            <QuickTile index={1} icon="bookmark" label={t('savedPosts')}        color={D.gold}   onPress={() => {}} />
-            <QuickTile index={2} icon="paw"      label={t('profile.myListings')} color={D.amber}  onPress={() => {}} />
+            <QuickTile index={0} icon="cart"     label={t('myOrders')}          color={D.green}  onPress={() => navigation.navigate('MyOrders')} />
+            <QuickTile index={1} icon="bookmark" label={t('savedPosts')}        color={D.gold}   onPress={() => navigation.navigate('SavedPosts')} />
+            <QuickTile index={2} icon="paw"      label={t('profile.myListings')} color={D.amber}  onPress={() => navigation.navigate('MyAnimalListings')} />
             <QuickTile index={3} icon="headset"  label={t('profile.helpCenter')} color={D.blue}   onPress={() => Alert.alert(t('profile.support'), t('profile.helpline'))} />
           </View>
         </View>
@@ -337,7 +337,7 @@ export default function ProfileScreen({ navigation }) {
         {/* ── My Activity ────────────────────────────────────────── */}
         <View style={[S.section, { marginTop: 8 }]}>
           <SectionHeader title={t('myActivity')} />
-          <RowItem icon="paw-outline"       iconColor={D.amber} label={t('myAnimalListings')}          subtitle={t('profile.listingsCount', { count: counts.animalListings || 0 })}   onPress={() => {}} />
+          <RowItem icon="paw-outline"       iconColor={D.amber} label={t('myAnimalListings')}          subtitle={t('profile.listingsCount', { count: counts.animalListings || 0 })}   onPress={() => navigation.navigate('MyAnimalListings')} />
           <RowItem icon="construct-outline" iconColor={D.cyan}  label={t('myRentListings')}            subtitle={t('profile.bookingsCount', { count: counts.bookings || 0 })}         onPress={() => navigation.navigate('MyRentListings')} noBorder />
         </View>
 

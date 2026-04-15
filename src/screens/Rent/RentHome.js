@@ -18,7 +18,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Location from 'expo-location';
+import { useLocation } from '../../context/LocationContext';
 import api from '../../services/api';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
@@ -293,6 +293,12 @@ export default function RentHome({ navigation }) {
   const { isLoggedIn } = useAuth();
   const insets       = useSafeAreaInsets();
 
+  // ── Global GPS from LocationContext (fetched once at app start) ───────────
+  const { coords: gpsCoords, loading: gpsLoading } = useLocation();
+  const userLat  = gpsCoords?.latitude  ?? null;
+  const userLng  = gpsCoords?.longitude ?? null;
+  const gpsReady = !gpsLoading;
+
   const [tab,       setTab]       = useState('machinery');
   const [category,  setCategory]  = useState('all');
   const [search,    setSearch]    = useState('');
@@ -303,29 +309,7 @@ export default function RentHome({ navigation }) {
   const [pendingCount, setPendingCount] = useState(0);
   const [hasListings,  setHasListings]  = useState(false);
 
-  // ── GPS state ──────────────────────────────────────────────────────────────
-  const [userLat,     setUserLat]     = useState(null);
-  const [userLng,     setUserLng]     = useState(null);
-  const [gpsReady,    setGpsReady]    = useState(false); // true after first GPS attempt
-  const [radiusKm,    setRadiusKm]    = useState(10);    // default 10 km
-
-  // ── Fetch GPS once on mount ────────────────────────────────────────────────
-  useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          setUserLat(pos.coords.latitude);
-          setUserLng(pos.coords.longitude);
-        }
-      } catch {
-        // GPS unavailable — fall back to no-filter mode
-      } finally {
-        setGpsReady(true);
-      }
-    })();
-  }, []);
+  const [radiusKm, setRadiusKm] = useState(10); // default 10 km
 
   const fetchAll = useCallback(async () => {
     setLoading(true);

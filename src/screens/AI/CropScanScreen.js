@@ -22,6 +22,7 @@ import * as Location   from 'expo-location';
 import { scanCropImage } from '../../services/aiApi';
 import { useFarm, COMMON_CROPS, SOIL_TYPES, IRRIGATION_TYPES } from '../../context/FarmContext';
 import { useLanguage } from '../../context/LanguageContext';
+import FarmProfileBanner from '../../components/FarmProfileBanner';
 
 const { width: W } = Dimensions.get('window');
 
@@ -365,6 +366,13 @@ export default function CropScanScreen({ navigation }) {
         {step === 1 && (
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
             <ScrollView contentContainerStyle={SC.scrollContent} showsVerticalScrollIndicator={false}>
+
+              {/* ── Farm Profile Banner ── */}
+              <FarmProfileBanner
+                compact
+                style={SC.farmBanner}
+                onEdit={() => navigation.navigate('Account')}
+              />
 
               {/* Crop selection */}
               <AnimCard delay={0}>
@@ -827,6 +835,7 @@ const SC = StyleSheet.create({
 
   // Scroll content
   scrollContent: { paddingHorizontal: 18, paddingTop: 18 },
+  farmBanner: { marginBottom: 18 },
 
   // Section label
   sectionLabel: {

@@ -21,7 +21,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { getIrrigationToday, logIrrigation, getCrops } from '../../services/aiApi';
-import * as Location from 'expo-location';
+import { useLocation } from '../../context/LocationContext';
 
 const BG     = '#0A140A';
 const GREEN  = '#2ECC71';
@@ -33,6 +33,7 @@ const WEEKDAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 export default function IrrigationScreen({ navigation }) {
   const { user } = useAuth();
   const { language } = useLanguage();
+  const { coords: gpsCoords } = useLocation();
 
   const [today, setToday]       = useState(null);
   const [logId, setLogId]       = useState(null);
@@ -56,16 +57,8 @@ export default function IrrigationScreen({ navigation }) {
     setLogId(null);
     setLoggedAction(null);
     try {
-      let lat = 18.52;
-      let lon = 73.85;
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-          lat = pos.coords.latitude;
-          lon = pos.coords.longitude;
-        }
-      } catch {}
+      const lat = gpsCoords?.latitude  ?? 18.52;
+      const lon = gpsCoords?.longitude ?? 73.85;
 
       const result = await getIrrigationToday({ crop, lat, lon });
       setToday(result);
