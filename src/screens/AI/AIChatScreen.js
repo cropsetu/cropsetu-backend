@@ -308,49 +308,50 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
         <Text style={VM.statusLabel}>{statusLabel}</Text>
       </View>
 
-      {/* Transcript result */}
-      {voiceResult && !isRecording && !isProcessing && (
+      {/* Error card — only shown when something went wrong (success auto-closes modal) */}
+      {voiceResult?.error && !isRecording && !isProcessing && (
         <Animated.View style={[VM.resultCard, { opacity: transFade }]}>
-          {voiceResult.error ? (
-            <Text style={VM.errorText}>⚠ {voiceResult.error}</Text>
-          ) : (
-            <>
-              <View style={VM.resultRow}><Ionicons name="mic-outline" size={13} color={V_MUTED} /><Text style={VM.resultTrans} numberOfLines={2}>{voiceResult.transcription}</Text></View>
-              <View style={[VM.resultRow, { marginTop: 8 }]}><Ionicons name="leaf-outline" size={13} color={P_LIGHT} /><Text style={VM.resultReply} numberOfLines={3}>{voiceResult.reply}</Text></View>
-              <TouchableOpacity style={VM.viewChatBtn} onPress={onClose} activeOpacity={0.8}>
-                <Text style={VM.viewChatText}>View full reply in Chat →</Text>
-              </TouchableOpacity>
-            </>
-          )}
+          <Text style={VM.errorText}>⚠ {voiceResult.error}</Text>
+          <TouchableOpacity style={VM.retryBtn} onPress={onStart} activeOpacity={0.8}>
+            <Text style={VM.retryText}>Tap to retry</Text>
+          </TouchableOpacity>
         </Animated.View>
       )}
 
       {/* Controls */}
       <View style={[VM.controls, { paddingBottom: insets.bottom + 24 }]}>
         {isProcessing ? (
-          <ActivityIndicator color={P_LIGHT} size="large" />
+          <>
+            <ActivityIndicator color={P_LIGHT} size="large" />
+            <Text style={VM.hint}>Sending to FarmMind AI…</Text>
+          </>
         ) : isRecording ? (
           <View style={VM.activeRow}>
             <TouchableOpacity style={VM.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
               <Ionicons name="close" size={22} color={DANGER} />
             </TouchableOpacity>
-            <TouchableOpacity style={VM.sendRecBtn} onPress={onSend} activeOpacity={0.8}>
-              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.sendRecGrad}>
-                <Ionicons name="arrow-up" size={22} color="#FFF" />
-                <Text style={VM.sendRecText}>Send</Text>
+            <TouchableOpacity style={VM.doneBtn} onPress={onSend} activeOpacity={0.8}>
+              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.doneBtnGrad}>
+                <Ionicons name="checkmark" size={22} color="#FFF" />
+                <Text style={VM.doneBtnText}>Done</Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
         ) : (
+          /* Fallback — shown only if auto-start failed */
           <TouchableOpacity style={VM.micBtn} onPress={onStart} activeOpacity={0.8}>
             <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.micGrad}>
               <Ionicons name="mic" size={32} color="#FFF" />
             </LinearGradient>
           </TouchableOpacity>
         )}
-        <Text style={VM.hint}>
-          {isRecording ? 'Tap send when done, or cancel' : isProcessing ? 'Processing your voice…' : 'Speak in Hindi, Marathi, English or any Indian language'}
-        </Text>
+        {!isProcessing && (
+          <Text style={VM.hint}>
+            {isRecording
+              ? 'Speak now — tap Done when finished'
+              : 'Hindi, Marathi, English or any Indian language'}
+          </Text>
+        )}
       </View>
     </Animated.View>
   );
@@ -682,12 +683,15 @@ export default function AIChatScreen({ navigation, route }) {
       if (!uri) { setIsProcessing(false); return; }
       const result = await sendVoiceMessage(uri, conversationId, getAIContext());
       if (result.conversationId && !conversationId) setConvId(result.conversationId);
-      setVoiceResult(result);
+      // Add both messages to chat first
       addMessage({ role: 'user', text: result.transcription || '(voice)', isVoice: true });
       const aiMsg = { role: 'ai', text: result.reply };
       if (result.type === 'diagnosis' && result.card) aiMsg.diagnosisData = result.card;
       if (result.type === 'market'    && result.card) aiMsg.marketData    = result.card;
       addMessage(aiMsg);
+      // Auto-close modal — user lands in chat and sees the conversation
+      setVoiceResult(null);
+      setVoiceVisible(false);
     } catch (err) {
       recordRef.current = null;
       setVoiceResult({ error: err.response?.status === 429 ? 'Rate limit — wait 30s.' : 'Processing failed. Try again.' });
@@ -714,6 +718,14 @@ export default function AIChatScreen({ navigation, route }) {
       setHLoaded(true);
     } finally { setHLoading(false); }
   }, [historyLoading]);
+
+  // Auto-start recording as soon as the voice modal slides in
+  useEffect(() => {
+    if (voiceVisible && !isRecording && !isProcessing) {
+      const t = setTimeout(() => startRecording(), 350); // wait for spring animation
+      return () => clearTimeout(t);
+    }
+  }, [voiceVisible]);
 
   useEffect(() => { if (sidebarOpen && !historyLoaded) loadHistory(); }, [sidebarOpen]);
 
@@ -853,6 +865,7 @@ export default function AIChatScreen({ navigation, route }) {
         onCancel={cancelRecording}
         onClose={() => {
           if (isRecording) cancelRecording();
+          setVoiceResult(null);
           setVoiceVisible(false);
         }}
       />
@@ -979,10 +992,12 @@ const VM = StyleSheet.create({
   micBtn: { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', shadowColor: P_LIGHT, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 10 },
   micGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   cancelBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(239,68,68,0.10)', borderWidth: 1.5, borderColor: DANGER, justifyContent: 'center', alignItems: 'center' },
-  sendRecBtn: { borderRadius: 28, overflow: 'hidden' },
-  sendRecGrad: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 24, paddingVertical: 14 },
-  sendRecText: { fontSize: 15, fontWeight: '800', color: '#FFF' },
-  hint: { fontSize: 12, color: V_MUTED, textAlign: 'center', maxWidth: 260, lineHeight: 18 },
+  doneBtn: { borderRadius: 28, overflow: 'hidden' },
+  doneBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 28, paddingVertical: 14 },
+  doneBtnText: { fontSize: 16, fontWeight: '800', color: '#FFF' },
+  retryBtn: { marginTop: 12, alignSelf: 'center' },
+  retryText: { fontSize: 13, color: P_LIGHT, fontWeight: '700' },
+  hint: { fontSize: 12, color: V_MUTED, textAlign: 'center', maxWidth: 260, lineHeight: 18, marginTop: 6 },
 });
 
 // ── Sidebar styles (light) ─────────────────────────────────────────────────
