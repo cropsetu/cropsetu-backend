@@ -648,7 +648,10 @@ export default function AIChatScreen({ navigation, route }) {
   }, [input, typing, conversationId, addMessage, getAIContext]);
 
   const startRecording = useCallback(async () => {
-    if (isProcessing) return;
+    // Guard: if a Recording object already exists (e.g. auto-start double-fired or
+    // previous session wasn't fully cleaned up) silently bail — avoids the
+    // "Only one Recording object can be prepared at a given time" native error.
+    if (isProcessing || recordRef.current) return;
     try {
       const { status } = await Audio.requestPermissionsAsync();
       if (status !== 'granted') {
@@ -750,13 +753,17 @@ export default function AIChatScreen({ navigation, route }) {
     } finally { setHLoading(false); }
   }, [historyLoading]);
 
-  // Auto-start recording as soon as the voice modal slides in
+  // Auto-start recording as soon as the voice modal slides in.
+  // We use a ref flag so double-mount (strict mode / fast-refresh) can't fire
+  // two createAsync calls even when both see !isRecording.
+  const autoStartFiredRef = useRef(false);
   useEffect(() => {
-    if (voiceVisible && !isRecording && !isProcessing) {
-      const t = setTimeout(() => startRecording(), 350);
-      return () => clearTimeout(t);
-    }
-  }, [voiceVisible]);
+    if (!voiceVisible) { autoStartFiredRef.current = false; return; }
+    if (autoStartFiredRef.current) return;
+    autoStartFiredRef.current = true;
+    const t = setTimeout(() => startRecording(), 350);
+    return () => clearTimeout(t);
+  }, [voiceVisible, startRecording]);
 
   // Auto-redirect to chat after successful transcription (4 seconds)
   // Using useEffect instead of setTimeout inside async — reliable, React-idiomatic
