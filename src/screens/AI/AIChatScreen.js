@@ -256,7 +256,7 @@ function ParticleWordSphere({ isListening, audioLevel, transcript }) {
 }
 
 // ─── Voice full-screen modal (slides up, dark bg so particles look great) ─────
-function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDuration, voiceResult, onStart, onSend, onCancel, onClose, insets }) {
+function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, recordDuration, voiceResult, onStart, onSend, onCancel, onPause, onClose, insets }) {
   const slideAnim  = useRef(new Animated.Value(H)).current;
   const transFade  = useRef(new Animated.Value(0)).current;
   const pulseDot   = useRef(new Animated.Value(1)).current;
@@ -273,9 +273,13 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
     }
   }, [visible]);
 
-  // Waveform bars + pulsing recording dot while recording
+  // Waveform bars + pulsing recording dot — animate when recording & not paused
   useEffect(() => {
-    if (!isRecording) { barAnims.forEach(b => b.setValue(0.3)); pulseDot.setValue(1); return; }
+    if (!isRecording || isPaused) {
+      barAnims.forEach(b => b.setValue(0.3));
+      pulseDot.setValue(1);
+      return;
+    }
     const pulse = Animated.loop(Animated.sequence([
       Animated.timing(pulseDot, { toValue: 1.5, duration: 600, useNativeDriver: true }),
       Animated.timing(pulseDot, { toValue: 1.0, duration: 600, useNativeDriver: true }),
@@ -290,7 +294,7 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
     pulse.start();
     bars.forEach(b => b.start());
     return () => { pulse.stop(); bars.forEach(b => b.stop()); };
-  }, [isRecording]);
+  }, [isRecording, isPaused]);
 
   useEffect(() => {
     if (voiceResult?.error) Animated.timing(transFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
@@ -321,15 +325,7 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
         transcript={voiceResult?.transcription || ''}
       />
 
-      {/* Status — only shown while actively recording or processing, not the idle "tap" label */}
-      {(isRecording || isProcessing) && (
-        <View style={[VM.statusPill, isRecording && VM.statusPillActive]}>
-          <View style={[VM.statusDot, { backgroundColor: isProcessing ? '#F59E0B' : P_LIGHT }]} />
-          <Text style={VM.statusLabel}>{isProcessing ? 'Sending to FarmMind AI…' : 'Listening…'}</Text>
-        </View>
-      )}
-
-      {/* Error card — only shown when something went wrong (success auto-closes modal) */}
+      {/* Error card — only shown when something went wrong */}
       {voiceResult?.error && !isRecording && !isProcessing && (
         <Animated.View style={[VM.resultCard, { opacity: transFade }]}>
           <Text style={VM.errorText}>⚠ {voiceResult.error}</Text>
@@ -362,11 +358,15 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
               <Animated.View style={[VM.recDot, { transform: [{ scale: pulseDot }] }]} />
               <Text style={VM.timerText}>{mins}:{secs}</Text>
             </View>
-            {/* Slim pill buttons */}
+            {/* Three pill buttons: Cancel · Pause/Resume · Done */}
             <View style={VM.pillRow}>
               <TouchableOpacity style={VM.cancelPill} onPress={onCancel} activeOpacity={0.8}>
                 <Ionicons name="close" size={15} color={DANGER} />
                 <Text style={VM.cancelPillText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={VM.pausePill} onPress={onPause} activeOpacity={0.8}>
+                <Ionicons name={isPaused ? 'play' : 'pause'} size={15} color={V_TEXT} />
+                <Text style={VM.pausePillText}>{isPaused ? 'Resume' : 'Pause'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={VM.donePill} onPress={onSend} activeOpacity={0.8}>
                 <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.donePillGrad}>
@@ -375,15 +375,13 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
                 </LinearGradient>
               </TouchableOpacity>
             </View>
-            <Text style={VM.hint}>Speak in Hindi, Marathi, English or any Indian language</Text>
           </>
         ) : voiceResult && !voiceResult.error ? (
-          /* Success — particles showing transcript, redirecting in ~4s */
           <View style={VM.successRow}>
             <Ionicons name="checkmark-circle" size={20} color={P_LIGHT} />
             <Text style={VM.successText}>Opening chat…</Text>
           </View>
-        ) : null /* brief silence before auto-start fires */}
+        ) : null}
       </View>
     </Animated.View>
   );
@@ -605,6 +603,7 @@ export default function AIChatScreen({ navigation, route }) {
   const lastSentAt = useRef(0);
 
   const [isRecording,  setIsRecording]  = useState(false);
+  const [isPaused,     setIsPaused]     = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [recordDuration, setRecDur]     = useState(0);
   const [audioLevel,   setAudioLevel]   = useState(0);
@@ -745,8 +744,25 @@ export default function AIChatScreen({ navigation, route }) {
       recordRef.current = null;
     }
     recordingLockRef.current = false;
-    setIsRecording(false); setIsProcessing(false); setRecDur(0); setAudioLevel(0);
+    setIsRecording(false); setIsPaused(false); setIsProcessing(false); setRecDur(0); setAudioLevel(0);
   }, []);
+
+  const togglePause = useCallback(async () => {
+    if (!recordRef.current) return;
+    try {
+      if (isPaused) {
+        await recordRef.current.resumeAsync();
+        recTimerRef.current = setInterval(() => setRecDur(d => d + 1), 1000);
+        setIsPaused(false);
+      } else {
+        await recordRef.current.pauseAsync();
+        clearInterval(recTimerRef.current);
+        setIsPaused(true);
+      }
+    } catch (err) {
+      console.warn('[Recording] togglePause failed:', err?.message);
+    }
+  }, [isPaused]);
 
   const loadHistory = useCallback(async () => {
     if (historyLoading) return;
@@ -900,6 +916,7 @@ export default function AIChatScreen({ navigation, route }) {
       <VoiceModal
         visible={voiceVisible}
         isRecording={isRecording}
+        isPaused={isPaused}
         isProcessing={isProcessing}
         audioLevel={audioLevel}
         recordDuration={recordDuration}
@@ -908,9 +925,11 @@ export default function AIChatScreen({ navigation, route }) {
         onStart={startRecording}
         onSend={stopAndSend}
         onCancel={cancelRecording}
+        onPause={togglePause}
         onClose={() => {
-          if (isRecording) cancelRecording();
+          if (isRecording || isPaused) cancelRecording();
           setVoiceResult(null);
+          setIsPaused(false);
           setVoiceVisible(false);
         }}
       />
@@ -1036,9 +1055,11 @@ const VM = StyleSheet.create({
   timerRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 2 },
   recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: DANGER },
   timerText: { fontSize: 24, fontWeight: '200', color: V_TEXT, letterSpacing: 3 },
-  pillRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
-  cancelPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, paddingVertical: 11, borderRadius: 24, borderWidth: 1, borderColor: DANGER, backgroundColor: 'rgba(239,68,68,0.08)' },
-  cancelPillText: { fontSize: 14, color: DANGER, fontWeight: '600' },
+  pillRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap', justifyContent: 'center' },
+  cancelPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 24, borderWidth: 1, borderColor: DANGER, backgroundColor: 'rgba(239,68,68,0.08)' },
+  cancelPillText: { fontSize: 13, color: DANGER, fontWeight: '600' },
+  pausePill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 24, borderWidth: 1, borderColor: V_BORD, backgroundColor: V_GLASS },
+  pausePillText: { fontSize: 13, color: V_TEXT, fontWeight: '600' },
   donePill: { borderRadius: 24, overflow: 'hidden' },
   donePillGrad: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 28, paddingVertical: 11 },
   donePillText: { fontSize: 14, color: '#FFF', fontWeight: '700' },
