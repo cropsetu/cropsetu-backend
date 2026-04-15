@@ -258,8 +258,10 @@ function ParticleWordSphere({ isListening, audioLevel, transcript }) {
 
 // ─── Voice full-screen modal (slides up, dark bg so particles look great) ─────
 function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDuration, voiceResult, onStart, onSend, onCancel, onClose, insets }) {
-  const slideAnim = useRef(new Animated.Value(H)).current;
-  const transFade = useRef(new Animated.Value(0)).current;
+  const slideAnim  = useRef(new Animated.Value(H)).current;
+  const transFade  = useRef(new Animated.Value(0)).current;
+  const pulseDot   = useRef(new Animated.Value(1)).current;
+  const barAnims   = useRef(Array.from({ length: 5 }, () => new Animated.Value(0.3))).current;
   const [mounted, setMounted] = useState(visible);
 
   useEffect(() => {
@@ -272,8 +274,27 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
     }
   }, [visible]);
 
+  // Waveform bars + pulsing recording dot while recording
   useEffect(() => {
-    if (voiceResult?.transcription) Animated.timing(transFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    if (!isRecording) { barAnims.forEach(b => b.setValue(0.3)); pulseDot.setValue(1); return; }
+    const pulse = Animated.loop(Animated.sequence([
+      Animated.timing(pulseDot, { toValue: 1.5, duration: 600, useNativeDriver: true }),
+      Animated.timing(pulseDot, { toValue: 1.0, duration: 600, useNativeDriver: true }),
+    ]));
+    const bars = barAnims.map((b, i) =>
+      Animated.loop(Animated.sequence([
+        Animated.delay(i * 90),
+        Animated.timing(b, { toValue: 1,   duration: 350 + i * 30, useNativeDriver: true }),
+        Animated.timing(b, { toValue: 0.2, duration: 350 + i * 30, useNativeDriver: true }),
+      ]))
+    );
+    pulse.start();
+    bars.forEach(b => b.start());
+    return () => { pulse.stop(); bars.forEach(b => b.stop()); };
+  }, [isRecording]);
+
+  useEffect(() => {
+    if (voiceResult?.error) Animated.timing(transFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
     else transFade.setValue(0);
   }, [voiceResult]);
 
@@ -281,7 +302,7 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
 
   const mins = Math.floor(recordDuration / 60).toString().padStart(2, '0');
   const secs = (recordDuration % 60).toString().padStart(2, '0');
-  const statusLabel = isProcessing ? 'Analysing…' : isRecording ? `Listening  ${mins}:${secs}` : 'Tap mic to speak';
+  const statusLabel = isProcessing ? 'Sending to FarmMind AI…' : isRecording ? 'Listening…' : 'Tap mic to speak';
 
   return (
     <Animated.View style={[VM.root, { transform: [{ translateY: slideAnim }] }]}>
@@ -319,38 +340,53 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
       )}
 
       {/* Controls */}
-      <View style={[VM.controls, { paddingBottom: insets.bottom + 24 }]}>
+      <View style={[VM.controls, { paddingBottom: insets.bottom + 28 }]}>
         {isProcessing ? (
-          <>
-            <ActivityIndicator color={P_LIGHT} size="large" />
-            <Text style={VM.hint}>Sending to FarmMind AI…</Text>
-          </>
-        ) : isRecording ? (
-          <View style={VM.activeRow}>
-            <TouchableOpacity style={VM.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
-              <Ionicons name="close" size={22} color={DANGER} />
-            </TouchableOpacity>
-            <TouchableOpacity style={VM.doneBtn} onPress={onSend} activeOpacity={0.8}>
-              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.doneBtnGrad}>
-                <Ionicons name="checkmark" size={22} color="#FFF" />
-                <Text style={VM.doneBtnText}>Done</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+          <View style={VM.processingRow}>
+            <ActivityIndicator color={P_LIGHT} size="small" />
+            <Text style={VM.processingText}>Analysing…</Text>
           </View>
+        ) : isRecording ? (
+          <>
+            {/* Animated waveform bars */}
+            <View style={VM.waveRow}>
+              {barAnims.map((b, i) => (
+                <Animated.View key={i} style={[VM.bar, {
+                  transform: [{ scaleY: b.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) }],
+                  backgroundColor: i === 2 ? P_LIGHT : i % 2 === 0 ? A_LIGHT : '#4ADE80',
+                }]} />
+              ))}
+            </View>
+            {/* Timer row */}
+            <View style={VM.timerRow}>
+              <Animated.View style={[VM.recDot, { transform: [{ scale: pulseDot }] }]} />
+              <Text style={VM.timerText}>{mins}:{secs}</Text>
+            </View>
+            {/* Slim pill buttons */}
+            <View style={VM.pillRow}>
+              <TouchableOpacity style={VM.cancelPill} onPress={onCancel} activeOpacity={0.8}>
+                <Ionicons name="close" size={15} color={DANGER} />
+                <Text style={VM.cancelPillText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={VM.donePill} onPress={onSend} activeOpacity={0.8}>
+                <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.donePillGrad}>
+                  <Ionicons name="checkmark" size={15} color="#FFF" />
+                  <Text style={VM.donePillText}>Done</Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
+            <Text style={VM.hint}>Speak in Hindi, Marathi, English or any Indian language</Text>
+          </>
         ) : (
           /* Fallback — shown only if auto-start failed */
-          <TouchableOpacity style={VM.micBtn} onPress={onStart} activeOpacity={0.8}>
-            <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.micGrad}>
-              <Ionicons name="mic" size={32} color="#FFF" />
-            </LinearGradient>
-          </TouchableOpacity>
-        )}
-        {!isProcessing && (
-          <Text style={VM.hint}>
-            {isRecording
-              ? 'Speak now — tap Done when finished'
-              : 'Hindi, Marathi, English or any Indian language'}
-          </Text>
+          <>
+            <TouchableOpacity style={VM.micBtn} onPress={onStart} activeOpacity={0.8}>
+              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.micGrad}>
+                <Ionicons name="mic" size={32} color="#FFF" />
+              </LinearGradient>
+            </TouchableOpacity>
+            <Text style={VM.hint}>Tap to start speaking</Text>
+          </>
         )}
       </View>
     </Animated.View>
@@ -683,15 +719,18 @@ export default function AIChatScreen({ navigation, route }) {
       if (!uri) { setIsProcessing(false); return; }
       const result = await sendVoiceMessage(uri, conversationId, getAIContext());
       if (result.conversationId && !conversationId) setConvId(result.conversationId);
-      // Add both messages to chat first
+      // Add both messages to chat immediately
       addMessage({ role: 'user', text: result.transcription || '(voice)', isVoice: true });
       const aiMsg = { role: 'ai', text: result.reply };
       if (result.type === 'diagnosis' && result.card) aiMsg.diagnosisData = result.card;
       if (result.type === 'market'    && result.card) aiMsg.marketData    = result.card;
       addMessage(aiMsg);
-      // Auto-close modal — user lands in chat and sees the conversation
-      setVoiceResult(null);
-      setVoiceVisible(false);
+      // Keep the particle sphere showing the transcript text for ~4.5s, then redirect to chat
+      setVoiceResult(result);
+      setTimeout(() => {
+        setVoiceResult(null);
+        setVoiceVisible(false);
+      }, 4500);
     } catch (err) {
       recordRef.current = null;
       setVoiceResult({ error: err.response?.status === 429 ? 'Rate limit — wait 30s.' : 'Processing failed. Try again.' });
@@ -921,9 +960,9 @@ const S = StyleSheet.create({
   dotsRow: { flexDirection: 'row', gap: 5, alignItems: 'center', height: 20 },
   dot:     { width: 7, height: 7, borderRadius: 4, backgroundColor: PRIMARY },
 
-  chipsList: { paddingHorizontal: 14, paddingVertical: 8, gap: 8, backgroundColor: CHAT_BG },
-  chip:      { backgroundColor: '#FFFFFF', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 3, elevation: 1 },
-  chipText:  { fontSize: 13, color: TEXT2, fontWeight: '500' },
+  chipsList: { paddingHorizontal: 14, paddingVertical: 8, gap: 7, backgroundColor: CHAT_BG },
+  chip:      { backgroundColor: '#FFFFFF', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 2, elevation: 1 },
+  chipText:  { fontSize: 12, color: TEXT2, fontWeight: '500', lineHeight: 17 },
 
   inputBar: { backgroundColor: BG, paddingHorizontal: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: BORDER },
   inputRow: {
@@ -987,17 +1026,25 @@ const VM = StyleSheet.create({
   viewChatBtn: { alignItems: 'flex-end', marginTop: 8 },
   viewChatText: { fontSize: 12, color: P_LIGHT, fontWeight: '700' },
 
-  controls: { alignItems: 'center', gap: 12, width: '100%', paddingHorizontal: 32 },
-  activeRow: { flexDirection: 'row', gap: 20, alignItems: 'center' },
+  controls: { alignItems: 'center', gap: 10, width: '100%', paddingHorizontal: 24 },
+  processingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  processingText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
+  waveRow: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 44 },
+  bar: { width: 5, height: 36, borderRadius: 3 },
+  timerRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 2 },
+  recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: DANGER },
+  timerText: { fontSize: 24, fontWeight: '200', color: V_TEXT, letterSpacing: 3 },
+  pillRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  cancelPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 20, paddingVertical: 11, borderRadius: 24, borderWidth: 1, borderColor: DANGER, backgroundColor: 'rgba(239,68,68,0.08)' },
+  cancelPillText: { fontSize: 14, color: DANGER, fontWeight: '600' },
+  donePill: { borderRadius: 24, overflow: 'hidden' },
+  donePillGrad: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 28, paddingVertical: 11 },
+  donePillText: { fontSize: 14, color: '#FFF', fontWeight: '700' },
   micBtn: { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', shadowColor: P_LIGHT, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 10 },
   micGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  cancelBtn: { width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(239,68,68,0.10)', borderWidth: 1.5, borderColor: DANGER, justifyContent: 'center', alignItems: 'center' },
-  doneBtn: { borderRadius: 28, overflow: 'hidden' },
-  doneBtnGrad: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 28, paddingVertical: 14 },
-  doneBtnText: { fontSize: 16, fontWeight: '800', color: '#FFF' },
   retryBtn: { marginTop: 12, alignSelf: 'center' },
   retryText: { fontSize: 13, color: P_LIGHT, fontWeight: '700' },
-  hint: { fontSize: 12, color: V_MUTED, textAlign: 'center', maxWidth: 260, lineHeight: 18, marginTop: 6 },
+  hint: { fontSize: 12, color: V_MUTED, textAlign: 'center', maxWidth: 280, lineHeight: 18, marginTop: 4 },
 });
 
 // ── Sidebar styles (light) ─────────────────────────────────────────────────
