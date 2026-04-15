@@ -584,8 +584,10 @@ export default function AIChatScreen({ navigation, route }) {
   const [historyLoaded,  setHLoaded]   = useState(false);
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
+  // Collision-safe ID: base-36 timestamp + 7 random base-36 chars, never share float precision
   const addMessage = useCallback((msg) => {
-    setMessages(prev => [...prev, { id: String(Date.now() + Math.random()), ...msg }]);
+    const id = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+    setMessages(prev => [...prev, { id, ...msg }]);
   }, []);
 
   const sendMessage = useCallback(async (text) => {
@@ -616,9 +618,41 @@ export default function AIChatScreen({ navigation, route }) {
     if (isProcessing) return;
     try {
       const { status } = await Audio.requestPermissionsAsync();
-      if (status !== 'granted') { Alert.alert('Microphone Permission', 'Please allow microphone access in settings.'); return; }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording } = await Audio.Recording.createAsync({ ...Audio.RecordingOptionsPresets.HIGH_QUALITY, isMeteringEnabled: true });
+      if (status !== 'granted') {
+        Alert.alert('Microphone Permission', 'Please allow microphone access in Settings → Apps → FarmEasy → Permissions.');
+        return;
+      }
+      // Android needs shouldDuckAndroid + staysActiveInBackground; iOS needs allowsRecordingIOS
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS:       true,
+        playsInSilentModeIOS:     true,
+        staysActiveInBackground:  false,
+        shouldDuckAndroid:        true,
+        playThroughEarpieceAndroid: false,
+      });
+      const { recording } = await Audio.Recording.createAsync({
+        isMeteringEnabled: true,
+        android: {
+          extension:    '.m4a',
+          outputFormat: Audio.AndroidOutputFormat?.MPEG_4 ?? 2,
+          audioEncoder: Audio.AndroidAudioEncoder?.AAC   ?? 3,
+          sampleRate:   44100,
+          numberOfChannels: 1,   // mono is more reliable on low-end devices
+          bitRate:      64000,
+        },
+        ios: {
+          extension:      '.m4a',
+          outputFormat:   Audio.IOSOutputFormat?.MPEG4AAC ?? 'aac ',
+          audioQuality:   Audio.IOSAudioQuality?.MEDIUM   ?? 0x60,
+          sampleRate:     44100,
+          numberOfChannels: 1,
+          bitRate:        64000,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat:    false,
+        },
+        web: { mimeType: 'audio/webm', bitsPerSecond: 64000 },
+      });
       let lastUpdate = 0;
       recording.setOnRecordingStatusUpdate((s) => {
         const now = Date.now();
@@ -630,7 +664,10 @@ export default function AIChatScreen({ navigation, route }) {
       recordRef.current = recording;
       setIsRecording(true); setVoiceResult(null); setRecDur(0); setAudioLevel(0);
       recTimerRef.current = setInterval(() => setRecDur(d => d + 1), 1000);
-    } catch { Alert.alert('Error', 'Could not start recording. Please try again.'); }
+    } catch (err) {
+      console.error('[Recording] startRecording failed:', err?.message || err);
+      Alert.alert('Recording Error', `Could not start microphone.\n${err?.message || 'Please check microphone permissions and try again.'}`);
+    }
   }, [isProcessing]);
 
   const stopAndSend = useCallback(async () => {
