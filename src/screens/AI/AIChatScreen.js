@@ -257,12 +257,15 @@ function ParticleWordSphere({ isListening, audioLevel, transcript }) {
 
 // ─── Voice full-screen modal (slides up, dark bg so particles look great) ─────
 function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, recordDuration, voiceResult, onStart, onSend, onCancel, onPause, onClose, insets }) {
-  const slideAnim  = useRef(new Animated.Value(H)).current;
-  const transFade  = useRef(new Animated.Value(0)).current;
-  const pulseDot   = useRef(new Animated.Value(1)).current;
-  const barAnims   = useRef(Array.from({ length: 5 }, () => new Animated.Value(0.3))).current;
+  const slideAnim   = useRef(new Animated.Value(H)).current;
+  const transFade   = useRef(new Animated.Value(0)).current;
+  const ring1Scale  = useRef(new Animated.Value(1)).current;
+  const ring2Scale  = useRef(new Animated.Value(1)).current;
+  const ring3Scale  = useRef(new Animated.Value(1)).current;
+  const ringOpacity = useRef(new Animated.Value(0.3)).current;
   const [mounted, setMounted] = useState(visible);
 
+  // Slide in / out
   useEffect(() => {
     if (visible) {
       setMounted(true);
@@ -273,29 +276,49 @@ function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, 
     }
   }, [visible]);
 
-  // Waveform bars + pulsing recording dot — animate when recording & not paused
+  // Idle breathe loop — rings pulse gently when recording, freeze when paused
   useEffect(() => {
     if (!isRecording || isPaused) {
-      barAnims.forEach(b => b.setValue(0.3));
-      pulseDot.setValue(1);
+      Animated.parallel([
+        Animated.timing(ring1Scale,  { toValue: 1,    duration: 400, useNativeDriver: true }),
+        Animated.timing(ring2Scale,  { toValue: 1,    duration: 400, useNativeDriver: true }),
+        Animated.timing(ring3Scale,  { toValue: 1,    duration: 400, useNativeDriver: true }),
+        Animated.timing(ringOpacity, { toValue: 0.25, duration: 400, useNativeDriver: true }),
+      ]).start();
       return;
     }
-    const pulse = Animated.loop(Animated.sequence([
-      Animated.timing(pulseDot, { toValue: 1.5, duration: 600, useNativeDriver: true }),
-      Animated.timing(pulseDot, { toValue: 1.0, duration: 600, useNativeDriver: true }),
+    Animated.timing(ringOpacity, { toValue: 0.7, duration: 300, useNativeDriver: true }).start();
+    const a1 = Animated.loop(Animated.sequence([
+      Animated.timing(ring1Scale, { toValue: 1.18, duration: 700, useNativeDriver: true }),
+      Animated.timing(ring1Scale, { toValue: 1.0,  duration: 700, useNativeDriver: true }),
     ]));
-    const bars = barAnims.map((b, i) =>
-      Animated.loop(Animated.sequence([
-        Animated.delay(i * 90),
-        Animated.timing(b, { toValue: 1,   duration: 350 + i * 30, useNativeDriver: true }),
-        Animated.timing(b, { toValue: 0.2, duration: 350 + i * 30, useNativeDriver: true }),
-      ]))
-    );
-    pulse.start();
-    bars.forEach(b => b.start());
-    return () => { pulse.stop(); bars.forEach(b => b.stop()); };
+    const a2 = Animated.loop(Animated.sequence([
+      Animated.delay(250),
+      Animated.timing(ring2Scale, { toValue: 1.3, duration: 800, useNativeDriver: true }),
+      Animated.timing(ring2Scale, { toValue: 1.0, duration: 800, useNativeDriver: true }),
+    ]));
+    const a3 = Animated.loop(Animated.sequence([
+      Animated.delay(500),
+      Animated.timing(ring3Scale, { toValue: 1.45, duration: 900, useNativeDriver: true }),
+      Animated.timing(ring3Scale, { toValue: 1.0,  duration: 900, useNativeDriver: true }),
+    ]));
+    a1.start(); a2.start(); a3.start();
+    return () => { a1.stop(); a2.stop(); a3.stop(); };
   }, [isRecording, isPaused]);
 
+  // Audio-reactive boost — rings surge on voice, shrink on silence
+  useEffect(() => {
+    if (!isRecording || isPaused) return;
+    const l = Math.max(0, audioLevel);
+    Animated.parallel([
+      Animated.timing(ring1Scale,  { toValue: 1.1 + l * 0.3,  duration: 90, useNativeDriver: true }),
+      Animated.timing(ring2Scale,  { toValue: 1.2 + l * 0.45, duration: 90, useNativeDriver: true }),
+      Animated.timing(ring3Scale,  { toValue: 1.35 + l * 0.6, duration: 90, useNativeDriver: true }),
+      Animated.timing(ringOpacity, { toValue: 0.4 + l * 0.6,  duration: 90, useNativeDriver: true }),
+    ]).start();
+  }, [audioLevel]);
+
+  // Error fade
   useEffect(() => {
     if (voiceResult?.error) Animated.timing(transFade, { toValue: 1, duration: 250, useNativeDriver: true }).start();
     else transFade.setValue(0);
@@ -344,37 +367,56 @@ function VoiceModal({ visible, isRecording, isPaused, isProcessing, audioLevel, 
           </View>
         ) : isRecording ? (
           <>
-            {/* Animated waveform bars */}
-            <View style={VM.waveRow}>
-              {barAnims.map((b, i) => (
-                <Animated.View key={i} style={[VM.bar, {
-                  transform: [{ scaleY: b.interpolate({ inputRange: [0, 1], outputRange: [0.2, 1] }) }],
-                  backgroundColor: i === 2 ? P_LIGHT : i % 2 === 0 ? A_LIGHT : '#4ADE80',
+            {/* Status + timer */}
+            <Text style={VM.listeningLabel}>{isPaused ? 'Paused' : 'Listening...'}</Text>
+            <Text style={VM.bigTimer}>{mins}:{secs}</Text>
+
+            {/* Three-button row: Cancel · Mic(Done) · Pause */}
+            <View style={VM.threeRow}>
+
+              {/* Cancel */}
+              <View style={VM.sideBtnWrap}>
+                <TouchableOpacity style={VM.cancelCircle} onPress={onCancel} activeOpacity={0.8}>
+                  <Ionicons name="close" size={22} color={DANGER} />
+                </TouchableOpacity>
+                <Text style={VM.sideBtnLabel}>Cancel</Text>
+              </View>
+
+              {/* Center mic button (Done) with audio-reactive rings */}
+              <View style={VM.micWrap}>
+                <Animated.View style={[VM.ring3, {
+                  opacity: ringOpacity.interpolate({ inputRange: [0, 1], outputRange: [0, 0.15] }),
+                  transform: [{ scale: ring3Scale }],
                 }]} />
-              ))}
+                <Animated.View style={[VM.ring2, {
+                  opacity: ringOpacity.interpolate({ inputRange: [0, 1], outputRange: [0, 0.22] }),
+                  transform: [{ scale: ring2Scale }],
+                }]} />
+                <Animated.View style={[VM.ring1, {
+                  opacity: ringOpacity.interpolate({ inputRange: [0, 1], outputRange: [0, 0.35] }),
+                  transform: [{ scale: ring1Scale }],
+                }]} />
+                <TouchableOpacity style={VM.micBtn} onPress={onSend} activeOpacity={0.85}>
+                  <LinearGradient
+                    colors={isPaused ? ['#6B7280', '#4B5563'] : [P_LIGHT, PRIMARY]}
+                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
+                    style={VM.micGrad}
+                  >
+                    <Ionicons name="mic" size={34} color="#FFF" />
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+
+              {/* Pause */}
+              <View style={VM.sideBtnWrap}>
+                <TouchableOpacity style={VM.pauseCircle} onPress={onPause} activeOpacity={0.8}>
+                  <Ionicons name={isPaused ? 'play' : 'pause'} size={20} color={V_TEXT} />
+                </TouchableOpacity>
+                <Text style={VM.sideBtnLabel}>{isPaused ? 'Resume' : 'Pause'}</Text>
+              </View>
+
             </View>
-            {/* Timer row */}
-            <View style={VM.timerRow}>
-              <Animated.View style={[VM.recDot, { transform: [{ scale: pulseDot }] }]} />
-              <Text style={VM.timerText}>{mins}:{secs}</Text>
-            </View>
-            {/* Three pill buttons: Cancel · Pause/Resume · Done */}
-            <View style={VM.pillRow}>
-              <TouchableOpacity style={VM.cancelPill} onPress={onCancel} activeOpacity={0.8}>
-                <Ionicons name="close" size={15} color={DANGER} />
-                <Text style={VM.cancelPillText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={VM.pausePill} onPress={onPause} activeOpacity={0.8}>
-                <Ionicons name={isPaused ? 'play' : 'pause'} size={15} color={V_TEXT} />
-                <Text style={VM.pausePillText}>{isPaused ? 'Resume' : 'Pause'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={VM.donePill} onPress={onSend} activeOpacity={0.8}>
-                <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.donePillGrad}>
-                  <Ionicons name="checkmark" size={15} color="#FFF" />
-                  <Text style={VM.donePillText}>Done</Text>
-                </LinearGradient>
-              </TouchableOpacity>
-            </View>
+            <Text style={VM.doneHint}>Tap mic to send</Text>
           </>
         ) : voiceResult && !voiceResult.error ? (
           <View style={VM.successRow}>
@@ -1028,48 +1070,82 @@ const S = StyleSheet.create({
 });
 
 // ── Voice modal styles (dark) ──────────────────────────────────────────────
+const MIC_WRAP = 160; // outer container holding rings + button
 const VM = StyleSheet.create({
   root: { position: 'absolute', inset: 0, backgroundColor: V_BG, zIndex: 100 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 4 },
   closeBtn: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center', backgroundColor: V_GLASS },
   headerTitle: { fontSize: 15, fontWeight: '700', color: V_TEXT },
 
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: V_GLASS, borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, borderWidth: 1, borderColor: V_BORD },
-  statusPillActive: { borderColor: P_LIGHT },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusLabel: { fontSize: 14, fontWeight: '700', color: V_TEXT },
-
   resultCard: { backgroundColor: V_GLASS, borderRadius: 20, padding: 16, gap: 4, borderWidth: 1, borderColor: V_BORD, maxWidth: W - 48, marginHorizontal: 24 },
   errorText: { fontSize: 13, color: DANGER, textAlign: 'center' },
-  resultRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  resultTrans: { fontSize: 13, color: V_MUTED, flex: 1, lineHeight: 18 },
-  resultReply: { fontSize: 13, color: V_TEXT, flex: 1, lineHeight: 18 },
-  viewChatBtn: { alignItems: 'flex-end', marginTop: 8 },
-  viewChatText: { fontSize: 12, color: P_LIGHT, fontWeight: '700' },
-
-  controls: { alignItems: 'center', gap: 10, width: '100%', paddingHorizontal: 24 },
-  processingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
-  processingText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
-  waveRow: { flexDirection: 'row', alignItems: 'center', gap: 5, height: 44 },
-  bar: { width: 5, height: 36, borderRadius: 3 },
-  timerRow: { flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 2 },
-  recDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: DANGER },
-  timerText: { fontSize: 24, fontWeight: '200', color: V_TEXT, letterSpacing: 3 },
-  pillRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap', justifyContent: 'center' },
-  cancelPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 24, borderWidth: 1, borderColor: DANGER, backgroundColor: 'rgba(239,68,68,0.08)' },
-  cancelPillText: { fontSize: 13, color: DANGER, fontWeight: '600' },
-  pausePill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 18, paddingVertical: 11, borderRadius: 24, borderWidth: 1, borderColor: V_BORD, backgroundColor: V_GLASS },
-  pausePillText: { fontSize: 13, color: V_TEXT, fontWeight: '600' },
-  donePill: { borderRadius: 24, overflow: 'hidden' },
-  donePillGrad: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 28, paddingVertical: 11 },
-  donePillText: { fontSize: 14, color: '#FFF', fontWeight: '700' },
-  successRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  successText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
-  micBtn: { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', shadowColor: P_LIGHT, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 10 },
-  micGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   retryBtn: { marginTop: 12, alignSelf: 'center' },
   retryText: { fontSize: 13, color: P_LIGHT, fontWeight: '700' },
-  hint: { fontSize: 12, color: V_MUTED, textAlign: 'center', maxWidth: 280, lineHeight: 18, marginTop: 4 },
+
+  controls: { alignItems: 'center', gap: 6, width: '100%', paddingHorizontal: 24 },
+  processingRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  processingText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
+
+  listeningLabel: { fontSize: 17, fontWeight: '600', color: V_TEXT, letterSpacing: 0.3 },
+  bigTimer: { fontSize: 38, fontWeight: '100', color: V_TEXT, letterSpacing: 5, marginBottom: 20 },
+
+  // Three-button row
+  threeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 28 },
+  sideBtnWrap: { alignItems: 'center', gap: 8 },
+  sideBtnLabel: { fontSize: 12, color: V_MUTED, fontWeight: '500' },
+  cancelCircle: {
+    width: 58, height: 58, borderRadius: 29,
+    borderWidth: 1.5, borderColor: DANGER,
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  pauseCircle: {
+    width: 58, height: 58, borderRadius: 29,
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.25)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+
+  // Center mic button with rings
+  micWrap: {
+    width: MIC_WRAP, height: MIC_WRAP,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  // Rings — absolutely positioned, centered inside micWrap
+  ring3: {
+    position: 'absolute',
+    width: MIC_WRAP, height: MIC_WRAP,
+    borderRadius: MIC_WRAP / 2,
+    backgroundColor: P_LIGHT,
+    top: 0, left: 0,
+  },
+  ring2: {
+    position: 'absolute',
+    width: MIC_WRAP * 0.75, height: MIC_WRAP * 0.75,
+    borderRadius: MIC_WRAP * 0.375,
+    backgroundColor: P_LIGHT,
+    top: MIC_WRAP * 0.125, left: MIC_WRAP * 0.125,
+  },
+  ring1: {
+    position: 'absolute',
+    width: MIC_WRAP * 0.575, height: MIC_WRAP * 0.575,
+    borderRadius: MIC_WRAP * 0.2875,
+    backgroundColor: P_LIGHT,
+    top: MIC_WRAP * 0.2125, left: MIC_WRAP * 0.2125,
+  },
+  micBtn: {
+    width: 82, height: 82, borderRadius: 41, overflow: 'hidden',
+    shadowColor: P_LIGHT,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.7,
+    shadowRadius: 20,
+    elevation: 14,
+  },
+  micGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  doneHint: { fontSize: 12, color: V_MUTED, marginTop: 14, letterSpacing: 0.3 },
+
+  successRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  successText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
 });
 
 // ── Sidebar styles (light) ─────────────────────────────────────────────────
