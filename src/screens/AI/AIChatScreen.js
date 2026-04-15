@@ -3,7 +3,6 @@ import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   TextInput, KeyboardAvoidingView, Platform, Animated,
   ActivityIndicator, StatusBar, Dimensions, Alert, Easing,
-  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -302,7 +301,6 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
 
   const mins = Math.floor(recordDuration / 60).toString().padStart(2, '0');
   const secs = (recordDuration % 60).toString().padStart(2, '0');
-  const statusLabel = isProcessing ? 'Sending to FarmMind AI…' : isRecording ? 'Listening…' : 'Tap mic to speak';
 
   return (
     <Animated.View style={[VM.root, { transform: [{ translateY: slideAnim }] }]}>
@@ -323,11 +321,13 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
         transcript={voiceResult?.transcription || ''}
       />
 
-      {/* Status */}
-      <View style={[VM.statusPill, isRecording && VM.statusPillActive]}>
-        <View style={[VM.statusDot, { backgroundColor: isProcessing ? '#F59E0B' : isRecording ? P_LIGHT : V_MUTED }]} />
-        <Text style={VM.statusLabel}>{statusLabel}</Text>
-      </View>
+      {/* Status — only shown while actively recording or processing, not the idle "tap" label */}
+      {(isRecording || isProcessing) && (
+        <View style={[VM.statusPill, isRecording && VM.statusPillActive]}>
+          <View style={[VM.statusDot, { backgroundColor: isProcessing ? '#F59E0B' : P_LIGHT }]} />
+          <Text style={VM.statusLabel}>{isProcessing ? 'Sending to FarmMind AI…' : 'Listening…'}</Text>
+        </View>
+      )}
 
       {/* Error card — only shown when something went wrong (success auto-closes modal) */}
       {voiceResult?.error && !isRecording && !isProcessing && (
@@ -848,17 +848,6 @@ export default function AIChatScreen({ navigation, route }) {
           ) : null}
         />
 
-        {/* Compact suggestion chips */}
-        {messages.length <= 1 && (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={S.chipsList}>
-            {['Brown spots on tomato', 'Fertilizer for wheat', 'PM-KISAN details', 'Mandi price today', 'Pest scouting'].map((s, i) => (
-              <TouchableOpacity key={i} style={S.chip} onPress={() => sendMessage(s)} activeOpacity={0.7}>
-                <Text style={S.chipText} numberOfLines={1}>{s}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
-        )}
-
         {/* Input bar — mic inside left, send on right */}
         <View style={[S.inputBar, { paddingBottom: Math.max(insets.bottom, 14) }]}>
           <View style={S.inputRow}>
@@ -976,10 +965,6 @@ const S = StyleSheet.create({
 
   dotsRow: { flexDirection: 'row', gap: 5, alignItems: 'center', height: 20 },
   dot:     { width: 7, height: 7, borderRadius: 4, backgroundColor: PRIMARY },
-
-  chipsList: { paddingHorizontal: 14, paddingVertical: 8, gap: 7, backgroundColor: CHAT_BG },
-  chip:      { backgroundColor: '#FFFFFF', borderRadius: 14, paddingHorizontal: 12, paddingVertical: 6, borderWidth: 1, borderColor: BORDER, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 2, elevation: 1 },
-  chipText:  { fontSize: 12, color: TEXT2, fontWeight: '500', lineHeight: 17 },
 
   inputBar: { backgroundColor: BG, paddingHorizontal: 12, paddingTop: 10, borderTopWidth: 1, borderTopColor: BORDER },
   inputRow: {

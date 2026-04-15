@@ -230,22 +230,59 @@ export async function getMarketCrops() {
  * @returns {{ transcription, reply, type, card, conversationId }}
  */
 export async function sendVoiceMessage(audioUri, conversationId = null, farmProfile = {}) {
-  const formData = new FormData();
-  const fileName = audioUri.split('/').pop() || 'voice.m4a';
-  const ext      = fileName.split('.').pop()?.toLowerCase() || 'm4a';
-  const mimeMap  = { m4a: 'audio/m4a', mp3: 'audio/mpeg', wav: 'audio/wav',
-                     webm: 'audio/webm', ogg: 'audio/ogg', aac: 'audio/aac' };
-  const mimeType = mimeMap[ext] || 'audio/m4a';
+  const isWeb = typeof document !== 'undefined';
 
-  formData.append('audio', { uri: audioUri, name: fileName, type: mimeType });
-  if (conversationId) formData.append('conversationId', conversationId);
-  formData.append('farmProfile', JSON.stringify(farmProfile));
+  // ── Web path ────────────────────────────────────────────────────────────────
+  if (isWeb) {
+    const fileName = audioUri.split('/').pop() || 'voice.m4a';
+    const ext      = fileName.split('.').pop()?.toLowerCase() || 'm4a';
+    const mimeMap  = { m4a: 'audio/m4a', mp3: 'audio/mpeg', wav: 'audio/wav',
+                       webm: 'audio/webm', ogg: 'audio/ogg', aac: 'audio/aac' };
+    const mimeType = mimeMap[ext] || 'audio/m4a';
+    const formData = new FormData();
+    const resp = await fetch(audioUri);
+    const blob = await resp.blob();
+    formData.append('audio', blob, fileName);
+    if (conversationId) formData.append('conversationId', conversationId);
+    formData.append('farmProfile', JSON.stringify(farmProfile));
+    const { data } = await api.post('/ai/voice', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 60000,
+    });
+    return data.data;
+  }
 
-  const { data } = await api.post('/ai/voice', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 40000, // 40s — Whisper + AI response
-  });
-  return data.data; // { transcription, reply, type, card, conversationId }
+  // ── Native (iOS + Android) path ─────────────────────────────────────────────
+  // Android New Architecture (OkHttp/Turbo) silently drops file:// URIs in
+  // FormData — same issue as scanCropImage. Use FileSystem.uploadAsync instead.
+  const token = await getAccessToken();
+  const params = { farmProfile: JSON.stringify(farmProfile) };
+  if (conversationId) params.conversationId = conversationId;
+
+  const uploadResult = await FileSystem.uploadAsync(
+    `${API_BASE_URL}/ai/voice`,
+    audioUri,
+    {
+      httpMethod:  'POST',
+      uploadType:  FileSystem.FileSystemUploadType.MULTIPART,
+      fieldName:   'audio',
+      mimeType:    'audio/m4a',
+      headers:     token ? { Authorization: `Bearer ${token}` } : {},
+      parameters:  params,
+    },
+  );
+
+  if (uploadResult.status < 200 || uploadResult.status >= 300) {
+    let errBody;
+    try { errBody = JSON.parse(uploadResult.body); } catch { errBody = {}; }
+    const e = new Error(errBody?.error?.message || `HTTP ${uploadResult.status}`);
+    e.status = uploadResult.status;
+    e.response = { status: uploadResult.status, data: errBody };
+    throw e;
+  }
+
+  const json = JSON.parse(uploadResult.body);
+  return json.data; // { transcription, reply, type, card, conversationId }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
