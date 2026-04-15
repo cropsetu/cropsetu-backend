@@ -609,8 +609,9 @@ export default function AIChatScreen({ navigation, route }) {
   const [recordDuration, setRecDur]     = useState(0);
   const [audioLevel,   setAudioLevel]   = useState(0);
   const [voiceResult,  setVoiceResult]  = useState(null);
-  const recordRef   = useRef(null);
-  const recTimerRef = useRef(null);
+  const recordRef        = useRef(null);
+  const recTimerRef      = useRef(null);
+  const recordingLockRef = useRef(false); // synchronous guard — set BEFORE async createAsync
 
   const [sessions,       setSessions]  = useState([]);
   const [historyLoading, setHLoading]  = useState(false);
@@ -648,42 +649,44 @@ export default function AIChatScreen({ navigation, route }) {
   }, [input, typing, conversationId, addMessage, getAIContext]);
 
   const startRecording = useCallback(async () => {
-    // Guard: if a Recording object already exists (e.g. auto-start double-fired or
-    // previous session wasn't fully cleaned up) silently bail — avoids the
-    // "Only one Recording object can be prepared at a given time" native error.
-    if (isProcessing || recordRef.current) return;
+    // Synchronous lock checked BEFORE any async work.
+    // recordRef.current is only set after createAsync resolves, so two concurrent
+    // calls would both pass a plain recordRef.current===null check and both reach
+    // createAsync → "Only one Recording object can be prepared at a given time".
+    // recordingLockRef flips to true instantly, blocking the second call.
+    if (isProcessing || recordRef.current || recordingLockRef.current) return;
+    recordingLockRef.current = true;
     try {
       const { status } = await Audio.requestPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert('Microphone Permission', 'Please allow microphone access in Settings → Apps → FarmEasy → Permissions.');
         return;
       }
-      // Android needs shouldDuckAndroid + staysActiveInBackground; iOS needs allowsRecordingIOS
       await Audio.setAudioModeAsync({
-        allowsRecordingIOS:       true,
-        playsInSilentModeIOS:     true,
-        staysActiveInBackground:  false,
-        shouldDuckAndroid:        true,
+        allowsRecordingIOS:        true,
+        playsInSilentModeIOS:      true,
+        staysActiveInBackground:   false,
+        shouldDuckAndroid:         true,
         playThroughEarpieceAndroid: false,
       });
       const { recording } = await Audio.Recording.createAsync({
         isMeteringEnabled: true,
         android: {
-          extension:    '.m4a',
-          outputFormat: Audio.AndroidOutputFormat?.MPEG_4 ?? 2,
-          audioEncoder: Audio.AndroidAudioEncoder?.AAC   ?? 3,
-          sampleRate:   44100,
-          numberOfChannels: 1,   // mono is more reliable on low-end devices
-          bitRate:      64000,
+          extension:        '.m4a',
+          outputFormat:     Audio.AndroidOutputFormat?.MPEG_4 ?? 2,
+          audioEncoder:     Audio.AndroidAudioEncoder?.AAC   ?? 3,
+          sampleRate:       44100,
+          numberOfChannels: 1,
+          bitRate:          64000,
         },
         ios: {
-          extension:      '.m4a',
-          outputFormat:   Audio.IOSOutputFormat?.MPEG4AAC ?? 'aac ',
-          audioQuality:   Audio.IOSAudioQuality?.MEDIUM   ?? 0x60,
-          sampleRate:     44100,
-          numberOfChannels: 1,
-          bitRate:        64000,
-          linearPCMBitDepth: 16,
+          extension:           '.m4a',
+          outputFormat:        Audio.IOSOutputFormat?.MPEG4AAC ?? 'aac ',
+          audioQuality:        Audio.IOSAudioQuality?.MEDIUM   ?? 0x60,
+          sampleRate:          44100,
+          numberOfChannels:    1,
+          bitRate:             64000,
+          linearPCMBitDepth:   16,
           linearPCMIsBigEndian: false,
           linearPCMIsFloat:    false,
         },
@@ -703,6 +706,9 @@ export default function AIChatScreen({ navigation, route }) {
     } catch (err) {
       console.error('[Recording] startRecording failed:', err?.message || err);
       Alert.alert('Recording Error', `Could not start microphone.\n${err?.message || 'Please check microphone permissions and try again.'}`);
+    } finally {
+      // Always release the lock so a manual retry can succeed after an error
+      recordingLockRef.current = false;
     }
   }, [isProcessing]);
 
@@ -738,6 +744,7 @@ export default function AIChatScreen({ navigation, route }) {
       try { await recordRef.current.stopAndUnloadAsync(); await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch { }
       recordRef.current = null;
     }
+    recordingLockRef.current = false;
     setIsRecording(false); setIsProcessing(false); setRecDur(0); setAudioLevel(0);
   }, []);
 
