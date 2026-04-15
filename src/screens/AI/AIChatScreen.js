@@ -213,20 +213,30 @@ function ParticleWordSphere({ isListening, audioLevel, transcript }) {
   const wvRef = useRef(null);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     wvRef.current?.postMessage(JSON.stringify({ type: 'listening', value: isListening }));
   }, [isListening]);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     wvRef.current?.postMessage(JSON.stringify({ type: 'audioLevel', value: audioLevel }));
   }, [audioLevel]);
 
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     if (transcript) {
       wvRef.current?.postMessage(JSON.stringify({ type: 'transcript', value: transcript }));
     } else {
       wvRef.current?.postMessage(JSON.stringify({ type: 'reset' }));
     }
   }, [transcript]);
+
+  // WebView native module is not available on web preview — render a placeholder
+  if (Platform.OS === 'web') {
+    return <View style={{ width: W, height: SPHERE_H, alignItems: 'center', justifyContent: 'center' }}>
+      <Text style={{ color: V_MUTED, fontSize: 12 }}>Voice sphere — run on device</Text>
+    </View>;
+  }
 
   return (
     <View style={{ width: W, height: SPHERE_H }}>
