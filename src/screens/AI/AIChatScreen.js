@@ -377,17 +377,13 @@ function VoiceModal({ visible, isRecording, isProcessing, audioLevel, recordDura
             </View>
             <Text style={VM.hint}>Speak in Hindi, Marathi, English or any Indian language</Text>
           </>
-        ) : (
-          /* Fallback — shown only if auto-start failed */
-          <>
-            <TouchableOpacity style={VM.micBtn} onPress={onStart} activeOpacity={0.8}>
-              <LinearGradient colors={[USER_A, USER_B]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={VM.micGrad}>
-                <Ionicons name="mic" size={32} color="#FFF" />
-              </LinearGradient>
-            </TouchableOpacity>
-            <Text style={VM.hint}>Tap to start speaking</Text>
-          </>
-        )}
+        ) : voiceResult && !voiceResult.error ? (
+          /* Success — particles showing transcript, redirecting in ~4s */
+          <View style={VM.successRow}>
+            <Ionicons name="checkmark-circle" size={20} color={P_LIGHT} />
+            <Text style={VM.successText}>Opening chat…</Text>
+          </View>
+        ) : null /* brief silence before auto-start fires */}
       </View>
     </Animated.View>
   );
@@ -725,12 +721,8 @@ export default function AIChatScreen({ navigation, route }) {
       if (result.type === 'diagnosis' && result.card) aiMsg.diagnosisData = result.card;
       if (result.type === 'market'    && result.card) aiMsg.marketData    = result.card;
       addMessage(aiMsg);
-      // Keep the particle sphere showing the transcript text for ~4.5s, then redirect to chat
+      // Set result — the useEffect below watches this and closes after 4s
       setVoiceResult(result);
-      setTimeout(() => {
-        setVoiceResult(null);
-        setVoiceVisible(false);
-      }, 4500);
     } catch (err) {
       recordRef.current = null;
       setVoiceResult({ error: err.response?.status === 429 ? 'Rate limit — wait 30s.' : 'Processing failed. Try again.' });
@@ -761,10 +753,21 @@ export default function AIChatScreen({ navigation, route }) {
   // Auto-start recording as soon as the voice modal slides in
   useEffect(() => {
     if (voiceVisible && !isRecording && !isProcessing) {
-      const t = setTimeout(() => startRecording(), 350); // wait for spring animation
+      const t = setTimeout(() => startRecording(), 350);
       return () => clearTimeout(t);
     }
   }, [voiceVisible]);
+
+  // Auto-redirect to chat after successful transcription (4 seconds)
+  // Using useEffect instead of setTimeout inside async — reliable, React-idiomatic
+  useEffect(() => {
+    if (!voiceResult || voiceResult.error) return;
+    const t = setTimeout(() => {
+      setVoiceResult(null);
+      setVoiceVisible(false);
+    }, 4000);
+    return () => clearTimeout(t); // cancelled if user closes manually or error occurs
+  }, [voiceResult]);
 
   useEffect(() => { if (sidebarOpen && !historyLoaded) loadHistory(); }, [sidebarOpen]);
 
@@ -1040,6 +1043,8 @@ const VM = StyleSheet.create({
   donePill: { borderRadius: 24, overflow: 'hidden' },
   donePillGrad: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 28, paddingVertical: 11 },
   donePillText: { fontSize: 14, color: '#FFF', fontWeight: '700' },
+  successRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  successText: { fontSize: 14, color: V_TEXT, fontWeight: '600' },
   micBtn: { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', shadowColor: P_LIGHT, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 16, elevation: 10 },
   micGrad: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   retryBtn: { marginTop: 12, alignSelf: 'center' },
