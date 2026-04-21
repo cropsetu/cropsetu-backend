@@ -12,12 +12,17 @@
  * non-sensitive messages (no tokens, diagnosis data, PII).
  */
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 const logger = {
   debug: (...args) => {
-    if (__DEV__) console.log('[DEBUG]', ...args); // eslint-disable-line no-console
+    if (isDev) console.log('[DEBUG]', ...args); // eslint-disable-line no-console
+  },
+  info: (...args) => {
+    console.log('[INFO]', ...args); // eslint-disable-line no-console
   },
   warn: (...args) => {
-    if (__DEV__) console.warn('[WARN]', ...args); // eslint-disable-line no-console
+    if (isDev) console.warn('[WARN]', ...args); // eslint-disable-line no-console
   },
   error: (...args) => {
     // Errors always log — never pass sensitive data here

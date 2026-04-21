@@ -15,7 +15,15 @@ import {
 } from '../services/cropCycle.service.js';
 
 const router = Router();
-router.use(authenticate);
+
+// This router is mounted at the root API prefix so it can serve both
+// /farms/:farmId/cycles and /cycles/:cycleId. Without this guard, every
+// unknown /api/v1/* URL would hit authenticate and return 401 instead of 404.
+router.use((req, _res, next) => {
+  const p = req.path;
+  if (p.startsWith('/farms/') || p.startsWith('/cycles/')) return authenticate(req, _res, next);
+  return next('router');
+});
 const wl = rateLimit({ windowMs: 15 * 60 * 1000, max: 40, keyGenerator: r => r.user?.id || r.ip });
 
 // List cycles for a farm
